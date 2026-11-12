@@ -34,6 +34,12 @@ App desktop (Electron) que fica em cima do [ComfyUI](https://github.com/comfyano
   - LoRA *opcional*: **auto** (o LLM decide) → **sempre** → **nunca**
 
   Passe o mouse para ver gatilhos, modelo base e um aviso ⚠ quando a LoRA não combina com o modelo (ex.: LoRA de SD1.5 num workspace SDXL). Cada imagem gerada mostra as LoRAs aplicadas, com força e origem: *fixa*, *você* (forçada) ou *LLM* (escolhida pelo LLM local).
+- **Tamanho da imagem**, de três jeitos:
+  - **Na mensagem**: `1920x1080`, `16:9`, `9:16`, "formato vertical", "na horizontal", "formato quadrado", "para o story", "wallpaper". O app reconhece isso sozinho, sem depender do LLM, e lembra o tamanho nas mensagens seguintes ("agora à noite" mantém o 16:9).
+  - **No seletor 📐** da faixa do topo: Auto, 1:1, 2:3, 3:2, 4:5, 9:16, 16:9, 21:9 ou personalizado (L × A). Vale para as próximas gerações daquele workspace.
+  - **Em um resultado pronto**: "Outro formato…" refaz a imagem com a mesma seed em outra proporção.
+
+  As proporções são ajustadas à resolução nativa do modelo (≈1 MP no SDXL/Pony/Illustrious/Flux, ≈0,4 MP no SD1.5). Tamanhos bem acima disso (ex.: 1920×1080 no SDXL) são gerados no tamanho nativo e ampliados numa segunda passada ("hires fix"), o que evita personagens duplicados e deformações. O limite é 2560 px por lado; para 4K, gere menor e use um upscaler. A ordem de prioridade é: o que você escreve na mensagem > seletor > LLM > padrão do workspace. Para mudar o padrão de um workspace, peça ao chat de configuração ("deixe o workspace X em 832×1216").
 - Iteração: "agora à noite", "mais close", "4 variações" — o LLM parte do último prompt. Os botões **Variar** e **Repetir seed** reaproveitam o prompt sem chamar o LLM. `/raw <prompt>` (ou a caixa *raw*) manda o texto direto.
 
 ## Requisitos
@@ -88,7 +94,7 @@ Chat de configuração:
 
 Chat de geração:
 - "retrato de uma guerreira élfica num penhasco ao pôr do sol"
-- "agora à noite, com lua cheia, 2 variações"
+- "agora à noite, com lua cheia, em 16:9, 2 variações"
 - "/raw 1girl, solo, silver hair, night, full moon"
 
 ## Segurança e limites

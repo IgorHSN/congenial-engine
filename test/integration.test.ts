@@ -214,6 +214,57 @@ describe('LoRA modes in the generation chat', () => {
   });
 });
 
+describe('image size in the generation chat', () => {
+  const latentOf = (p: Record<string, { class_type: string; inputs: Record<string, unknown> }>) =>
+    Object.values(p).find((n) => n.class_type === 'EmptyLatentImage')!.inputs;
+  const upscaleOf = (p: Record<string, { class_type: string; inputs: Record<string, unknown> }>) =>
+    Object.values(p).find((n) => n.class_type === 'LatentUpscale')?.inputs;
+  const results = (t: Awaited<ReturnType<typeof setup>>) =>
+    t.session.history().filter((e): e is Extract<GenEntry, { kind: 'result' }> => e.kind === 'result');
+
+  it('explicit sizes in the message win, use a hires pass and are remembered for follow-ups', async () => {
+    const t = await setup();
+    await t.session.send('um castelo em 1920x1080');
+    expect(latentOf(t.comfyServer.prompts[0])).toMatchObject({ width: 1344, height: 768 });
+    expect(upscaleOf(t.comfyServer.prompts[0])).toMatchObject({ width: 1920, height: 1080 });
+    const [r] = results(t);
+    expect(r.job).toMatchObject({ width: 1920, height: 1080 });
+    expect(r.size).toMatchObject({ source: 'text', hires: true, base: { width: 1344, height: 768 } });
+    // the LLM sees the size in its history so "agora à noite" keeps it
+    await t.session.send('agora à noite');
+    const history = JSON.parse(t.ollama.requests[1].messages[2].content);
+    expect(history).toMatchObject({ width: 1920, height: 1080 });
+  });
+
+  it('the size picker beats the LLM, and a format typed in the message beats the picker', async () => {
+    const t = await setup(); // the fake LLM always answers aspect "portrait"
+    await t.session.send('um castelo', { size: { kind: 'ratio', w: 16, h: 9 } });
+    expect(latentOf(t.comfyServer.prompts[0])).toMatchObject({ width: 1344, height: 768 });
+    expect(results(t)[0].size?.source).toBe('picker');
+
+    await t.session.send('um castelo, formato quadrado', { size: { kind: 'ratio', w: 16, h: 9 } });
+    expect(latentOf(t.comfyServer.prompts[1])).toMatchObject({ width: 1024, height: 1024 });
+    expect(results(t)[1].size?.source).toBe('text');
+
+    await t.session.send('um castelo', { size: { kind: 'auto' } });
+    expect(latentOf(t.comfyServer.prompts[2])).toMatchObject({ width: 832, height: 1216 });
+    expect(results(t)[2].size?.source).toBe('llm');
+  });
+
+  it('re-runs in another format with the same seed', async () => {
+    const t = await setup();
+    await t.session.send('um castelo');
+    const [first] = results(t);
+    await t.session.rerun(first.id, false, { kind: 'ratio', w: 16, h: 9 });
+    const second = results(t)[1];
+    expect(second.job.seed).toBe(first.job.seed);
+    expect(second.job).toMatchObject({ width: 1344, height: 768 });
+    // a plain "Variar" keeps the previous size
+    await t.session.rerun(second.id, true);
+    expect(results(t)[2].job).toMatchObject({ width: 1344, height: 768 });
+  });
+});
+
 describe('ComfyClient', () => {
   it('formats node validation errors', async () => {
     const server = await startFakeComfy({ failValidation: true });

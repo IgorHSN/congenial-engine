@@ -1,10 +1,39 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AppliedLora, DownloadInfo, GenEntry, GenEvent, InstalledModel, LoraMode, PublicSettings, Workspace } from '@shared/types';
+import type {
+  AppliedLora,
+  DownloadInfo,
+  GenEntry,
+  GenEvent,
+  InstalledModel,
+  LoraMode,
+  PublicSettings,
+  SizeRequest,
+  SizeSource,
+  Workspace,
+} from '@shared/types';
 import { BASE_MODEL_PROFILES } from '@shared/presets';
 import { api, imageUrl } from '../api';
 import { AppliedLoraChips, WorkspaceStrip } from './LoraChips';
+import { RerunSizeMenu, SizePicker } from './SizePicker';
 
 const MODES_KEY = 'atelier.loraModes';
+const SIZE_KEY = 'atelier.size';
+
+function loadJson<T>(key: string, fallback: T): T {
+  try {
+    return JSON.parse(localStorage.getItem(key) ?? 'null') ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveJson(key: string, value: unknown): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* storage unavailable: lasts for this session only */
+  }
+}
 
 function loadModes(): Record<string, Record<string, LoraMode>> {
   try {
@@ -44,6 +73,7 @@ export function GenerateChat({ settings, workspaces, downloads, onOpenSettings }
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [loraModels, setLoraModels] = useState<InstalledModel[]>([]);
   const [allModes, setAllModes] = useState(loadModes);
+  const [allSizes, setAllSizes] = useState(() => loadJson<Record<string, SizeRequest>>(SIZE_KEY, {}));
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -69,6 +99,14 @@ export function GenerateChat({ settings, workspaces, downloads, onOpenSettings }
   const active = workspaces.find((w) => w.id === activeId);
   const llmReady = !!settings.localLlm.model;
   const modes = allModes[activeId] ?? {};
+  const size: SizeRequest = allSizes[activeId] ?? { kind: 'auto' };
+  const setSize = (req: SizeRequest) => {
+    setAllSizes((prev) => {
+      const next = { ...prev, [activeId]: req };
+      saveJson(SIZE_KEY, next);
+      return next;
+    });
+  };
 
   // LoRA metadata for the strip; refreshed when the workspace changes or a download finishes.
   const finishedDownloads = downloads.filter((d) => d.state === 'done').length;
@@ -89,7 +127,7 @@ export function GenerateChat({ settings, workspaces, downloads, onOpenSettings }
     const t = input.trim();
     if (!t || busy) return;
     setInput('');
-    await api.gen.send(t, { raw, workspaceId: activeId || undefined, loraModes: modes });
+    await api.gen.send(t, { raw, workspaceId: activeId || undefined, loraModes: modes, size });
   };
 
   const clear = async () => {
@@ -130,7 +168,11 @@ export function GenerateChat({ settings, workspaces, downloads, onOpenSettings }
         </button>
       </div>
 
-      {active && <WorkspaceStrip workspace={active} models={loraModels} modes={modes} onModeChange={setMode} />}
+      {active && (
+        <WorkspaceStrip workspace={active} models={loraModels} modes={modes} onModeChange={setMode}>
+          <SizePicker workspace={active} value={size} onChange={setSize} />
+        </WorkspaceStrip>
+      )}
 
       <div className="chat-body" ref={scrollRef}>
         {!llmReady && (
@@ -153,8 +195,8 @@ export function GenerateChat({ settings, workspaces, downloads, onOpenSettings }
               <strong>{active ? (BASE_MODEL_PROFILES[active.baseModel]?.label ?? active.baseModel) : 'o modelo'}</strong>.
             </p>
             <p className="muted small">
-              Dica: peça ajustes em seguida ("agora à noite", "mais close", "4 variações"). Use <code>/raw</code> para enviar um prompt sem
-              refinamento.
+              Dica: peça ajustes em seguida ("agora à noite", "mais close", "4 variações"). Para o tamanho, escreva <code>16:9</code>,{' '}
+              <code>1920x1080</code> ou "formato vertical", ou use o 📐 no topo. <code>/raw</code> envia um prompt sem refinamento.
             </p>
           </div>
         )}
@@ -262,14 +304,17 @@ function EntryView({
         </div>
       )}
       {job.error && <div className="error small">{job.error}</div>}
+      {entry.size?.note && <div className="notice warning small">{entry.size.note}</div>}
       <div className="result-loras small">
         <span className="muted">LoRAs:</span>
         <AppliedLoraChips loras={appliedOf(entry)} />
       </div>
       <div className="result-meta small muted">
         <span>{entry.workspaceName}</span>
-        <span>
+        <span title={sizeTitle(entry)}>
           {job.width}×{job.height}
+          {entry.size?.hires ? ' · hires' : ''}
+          {entry.size && entry.size.source !== 'default' && entry.size.source !== 'previous' ? ` (${SIZE_SOURCE[entry.size.source]})` : ''}
         </span>
         <span>seed {job.seed}</span>
         <span className="spacer" />
@@ -279,6 +324,7 @@ function EntryView({
         <button className="btn tiny ghost" disabled={busy} onClick={() => void api.gen.rerun(entry.id, false)}>
           Repetir seed
         </button>
+        <RerunSizeMenu disabled={busy} onPick={(req) => void api.gen.rerun(entry.id, false, req)} />
         <button className="btn tiny ghost" onClick={() => onInsert(`/raw ${entry.refined.positive}`)}>
           Editar prompt
         </button>
@@ -303,4 +349,20 @@ function EntryView({
 /** LoRAs of a result; older entries only recorded the ones the LLM picked. */
 function appliedOf(entry: Extract<GenEntry, { kind: 'result' }>): AppliedLora[] {
   return entry.loras ?? (entry.refined.loras ?? []).map((l) => ({ ...l, source: 'auto' as const }));
+}
+
+const SIZE_SOURCE: Record<SizeSource, string> = {
+  text: 'pedido na mensagem',
+  picker: 'seletor',
+  llm: 'LLM',
+  default: 'padrão',
+  previous: 'anterior',
+};
+
+function sizeTitle(entry: Extract<GenEntry, { kind: 'result' }>): string {
+  const s = entry.size;
+  if (!s) return '';
+  const lines = [`Tamanho definido por: ${SIZE_SOURCE[s.source]}`];
+  if (s.hires && s.base) lines.push(`Gerado em ${s.base.width}×${s.base.height} e ampliado numa segunda passada (hires fix).`);
+  return lines.join('\n');
 }

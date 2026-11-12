@@ -305,6 +305,8 @@ export type GenEntry =
       finalNegative: string;
       /** LoRAs applied to this generation (absent in entries saved by older versions). */
       loras?: AppliedLora[];
+      /** How the size was decided; hires = generated at native size then upscaled in a second pass. */
+      size?: { source: SizeSource; hires: boolean; base?: { width: number; height: number }; note?: string };
       job: GenerationJob;
     }
   | { kind: 'notice'; id: string; at: string; level: 'info' | 'warning' | 'error'; text: string };
@@ -314,12 +316,24 @@ export type GenEvent =
   | { type: 'entry-update'; entry: GenEntry }
   | { type: 'busy'; busy: boolean; stage?: 'refining' | 'queueing' | 'generating' };
 
+/** How the user asked for the image size. */
+export type SizeRequest =
+  | { kind: 'auto' }
+  | { kind: 'aspect'; aspect: Aspect }
+  | { kind: 'ratio'; w: number; h: number }
+  | { kind: 'exact'; width: number; height: number };
+
+/** Where the final size came from: typed in the message, the size picker, the local LLM, or the workspace default. */
+export type SizeSource = 'text' | 'picker' | 'llm' | 'default' | 'previous';
+
 export interface GenSendOptions {
   /** Skip the local LLM and send the text as the positive prompt. */
   raw?: boolean;
   workspaceId?: string;
   /** User overrides per LoRA file: force on, force off, or let the LLM decide (optional LoRAs). */
   loraModes?: Record<string, LoraMode>;
+  /** Size picked in the chat ("auto" lets the message / LLM decide). */
+  size?: SizeRequest;
 }
 
 export interface ComfyDetection {

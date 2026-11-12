@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
-import { BASE_MODEL_PROFILES, SAFETY_NEGATIVE, sizeFor } from '@shared/presets';
+import { BASE_MODEL_PROFILES, SAFETY_NEGATIVE, parseSizeRequest, planSize } from '@shared/presets';
 import type {
   AppliedLora,
   GenEntry,
@@ -11,6 +11,8 @@ import type {
   LoraRef,
   RefinedPrompt,
   Settings,
+  SizeRequest,
+  SizeSource,
   Workspace,
 } from '@shared/types';
 import type { ComfyClient } from '../comfy/client';
@@ -151,7 +153,7 @@ export class GenerationSession {
         refined = result.prompt;
       }
       const applied: AppliedLora[] = [...split.always, ...(refined.loras ?? []).map((l) => ({ ...l, source: 'auto' as const }))];
-      await this.generate(ws, userText, refined, signal, applied);
+      await this.generate(ws, userText, refined, signal, { applied, picker: opts.size });
     } catch (err) {
       if (signal.aborted) this.notice('info', 'Cancelado.');
       else this.notice('error', (err as Error).message);
@@ -161,8 +163,8 @@ export class GenerationSession {
     }
   }
 
-  /** Re-run a previous result with a new seed (or the same seed). */
-  async rerun(entryId: string, newSeed = true): Promise<void> {
+  /** Re-run a previous result with a new seed (or the same seed), optionally in another size/format. */
+  async rerun(entryId: string, newSeed = true, size?: SizeRequest): Promise<void> {
     if (this.busy) return;
     const prev = this.entries.find((e) => e.id === entryId);
     if (!prev || prev.kind !== 'result') return;
@@ -181,7 +183,7 @@ export class GenerationSession {
           ...ws.loras.map((l) => ({ ...l, source: 'workspace' as const })),
           ...(prev.refined.loras ?? []).map((l) => ({ ...l, source: 'auto' as const })),
         ];
-      await this.generate(ws, '', refined, this.controller.signal, applied, prev);
+      await this.generate(ws, '', refined, this.controller.signal, { applied, basedOn: prev, forceSize: size });
     } catch (err) {
       if (this.controller?.signal.aborted) this.notice('info', 'Cancelado.');
       else this.notice('error', (err as Error).message);
@@ -227,9 +229,17 @@ export class GenerationSession {
     userText: string,
     refined: RefinedPrompt,
     signal: AbortSignal,
-    applied: AppliedLora[],
-    basedOn?: Extract<GenEntry, { kind: 'result' }>,
+    o: {
+      applied: AppliedLora[];
+      /** Size picker choice from the chat UI. */
+      picker?: SizeRequest;
+      /** Re-run of a previous result. */
+      basedOn?: Extract<GenEntry, { kind: 'result' }>;
+      /** Explicit size for a re-run ("outro formato"). */
+      forceSize?: SizeRequest;
+    },
   ): Promise<void> {
+    const { applied, basedOn } = o;
     const profile = BASE_MODEL_PROFILES[ws.baseModel] ?? BASE_MODEL_PROFILES.other;
     const d = ws.defaults;
 
@@ -255,12 +265,19 @@ export class GenerationSession {
       return;
     }
 
-    const size =
-      refined.width && refined.height
-        ? { width: refined.width, height: refined.height }
-        : refined.aspect
-          ? scaleToWorkspace(sizeFor(ws.baseModel, refined.aspect), d.width, d.height)
-          : { width: d.width, height: d.height };
+    // Size: what the message says > the size picker > (re-run: previous size) > the LLM > workspace default.
+    const choice = chooseSize(userText, refined, o.picker, o.forceSize, basedOn);
+    const plan = planSize(ws.baseModel, d, choice.request, ws.pipeline !== 'custom');
+    const size = { width: plan.width, height: plan.height };
+    const gen = plan.hires?.base ?? size;
+    const steps = refined.steps ?? d.steps;
+    // Keep what the user typed in the LLM's history so follow-ups ("agora à noite") keep the size.
+    const sizeMemory: Partial<RefinedPrompt> =
+      choice.source !== 'text'
+        ? {}
+        : choice.request.kind === 'aspect'
+          ? { aspect: choice.request.aspect, width: undefined, height: undefined }
+          : { width: size.width, height: size.height };
     const seed = refined.seed ?? randomSeed();
 
     const job: GenerationJob = {
@@ -278,10 +295,11 @@ export class GenerationSession {
       at: new Date().toISOString(),
       workspaceId: ws.id,
       workspaceName: ws.name,
-      refined: basedOn ? { ...basedOn.refined, seed: refined.seed } : refined,
+      refined: basedOn ? { ...basedOn.refined, seed: refined.seed } : { ...refined, ...sizeMemory },
       finalPositive,
       finalNegative,
       loras: applied,
+      size: { source: choice.source, hires: !!plan.hires, base: plan.hires?.base, note: plan.note },
       job,
     };
     this.push(entry);
@@ -290,9 +308,9 @@ export class GenerationSession {
     const graph = buildWorkflow(ws, {
       positive: finalPositive,
       negative: finalNegative,
-      width: size.width,
-      height: size.height,
-      steps: refined.steps ?? d.steps,
+      width: gen.width,
+      height: gen.height,
+      steps,
       cfg: refined.cfg ?? d.cfg,
       seed,
       batchSize: refined.batchSize ?? d.batchSize,
@@ -301,6 +319,7 @@ export class GenerationSession {
       guidance: d.guidance,
       clipSkip: d.clipSkip,
       loras,
+      hires: plan.hires ? { width: size.width, height: size.height, denoise: 0.55, steps: Math.max(8, Math.round(steps * 0.5)) } : undefined,
     });
 
     try {
@@ -338,18 +357,21 @@ export class GenerationSession {
   }
 }
 
-/** Keep the aspect ratio requested but respect the workspace's pixel budget (e.g. SD1.5 at 512px). */
-function scaleToWorkspace(
-  target: { width: number; height: number },
-  defW: number,
-  defH: number,
-): { width: number; height: number } {
-  const budget = defW * defH;
-  const ratio = target.width / target.height;
-  const h = Math.sqrt(budget / ratio);
-  const w = h * ratio;
-  const round = (n: number) => Math.max(64, Math.round(n / 64) * 64);
-  return { width: round(w), height: round(h) };
+function chooseSize(
+  userText: string,
+  refined: RefinedPrompt,
+  picker: SizeRequest | undefined,
+  forced: SizeRequest | undefined,
+  basedOn: Extract<GenEntry, { kind: 'result' }> | undefined,
+): { request: SizeRequest; source: SizeSource } {
+  if (forced && forced.kind !== 'auto') return { request: forced, source: 'picker' };
+  const typed = userText ? parseSizeRequest(userText) : null;
+  if (typed) return { request: typed, source: 'text' };
+  if (picker && picker.kind !== 'auto') return { request: picker, source: 'picker' };
+  if (basedOn) return { request: { kind: 'exact', width: basedOn.job.width, height: basedOn.job.height }, source: 'previous' };
+  if (refined.width && refined.height) return { request: { kind: 'exact', width: refined.width, height: refined.height }, source: 'llm' };
+  if (refined.aspect) return { request: { kind: 'aspect', aspect: refined.aspect }, source: 'llm' };
+  return { request: { kind: 'auto' }, source: 'default' };
 }
 
 export interface LoraSplit {

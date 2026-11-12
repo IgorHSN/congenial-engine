@@ -818,3 +818,37 @@ input[type='range'] {
 .pre-line {
   white-space: pre-line;
 }
+
+/* ---------- size picker */
+.ws-strip-end {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+}
+.size-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.select.small {
+  width: auto;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+.size-custom {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.size-custom input {
+  width: 72px;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+.tiny-select {
+  width: auto;
+  padding: 2px 6px;
+  font-size: 12px;
+  border-radius: 6px;
+}

@@ -9,6 +9,8 @@ export const REFINED_SCHEMA = {
     positive: { type: 'string' },
     negative: { type: 'string' },
     aspect: { type: 'string', enum: [...ASPECTS] },
+    width: { type: ['integer', 'null'] },
+    height: { type: ['integer', 'null'] },
     batch_size: { type: 'integer', minimum: 1, maximum: 8 },
     seed: { type: ['integer', 'null'] },
     loras: {
@@ -83,6 +85,7 @@ export function buildRefinerSystemPrompt(ctx: RefinerContext): string {
     'FIELDS:',
     '- "positive": the prompt text (English).',
     `- "aspect": one of ${ASPECTS.join(', ')} (portrait for single standing characters, landscape/wide for scenery; keep the previous one when iterating unless asked).`,
+    '- "width"/"height": null, unless the user gives pixel dimensions. If your previous answer had them, keep them while iterating unless the user asks for another size or format (then set aspect and put null here).',
     '- "batch_size": how many images (default 1, only more if the user asks).',
     '- "seed": null unless the user asks to reuse/fix a seed.',
     '- "comment": one short sentence to the user, in the same language they wrote in, saying what you generated or changed.',
@@ -121,6 +124,8 @@ function toWire(r: RefinedPrompt) {
     positive: r.positive,
     negative: r.negative,
     aspect: r.aspect ?? 'square',
+    width: r.width ?? null,
+    height: r.height ?? null,
     batch_size: r.batchSize ?? 1,
     seed: r.seed ?? null,
     loras: r.loras ?? [],
@@ -147,6 +152,9 @@ export function parseRefined(
   if (!positive) throw new RefinerParseError('O LLM local retornou um prompt vazio.');
 
   const aspect = ASPECTS.includes(o.aspect as Aspect) ? (o.aspect as Aspect) : undefined;
+  const width = Number(o.width);
+  const height = Number(o.height);
+  const hasSize = o.width != null && o.height != null && Number.isInteger(width) && Number.isInteger(height) && width >= 64 && height >= 64;
   const batch = Number(o.batch_size);
   const seed = Number(o.seed);
   const allowed = new Map(allowedLoras.map((l) => [l.file, l]));
@@ -165,6 +173,8 @@ export function parseRefined(
       positive,
       negative: typeof o.negative === 'string' ? o.negative.trim() : '',
       aspect,
+      width: hasSize ? width : undefined,
+      height: hasSize ? height : undefined,
       batchSize: Number.isInteger(batch) && batch >= 1 ? Math.min(batch, 8) : undefined,
       seed: Number.isSafeInteger(seed) && seed >= 0 && o.seed !== null ? seed : undefined,
       loras,

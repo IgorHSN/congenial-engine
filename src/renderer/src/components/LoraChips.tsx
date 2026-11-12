@@ -34,10 +34,12 @@ interface StripProps {
   models: InstalledModel[];
   modes: Record<string, LoraMode>;
   onModeChange: (file: string, mode: LoraMode) => void;
+  /** Extra controls shown at the end of the strip (e.g. the size picker). */
+  children?: React.ReactNode;
 }
 
 /** Shows the active workspace's model and LoRAs; click a LoRA to change how it is used. */
-export function WorkspaceStrip({ workspace: ws, models, modes, onModeChange }: StripProps) {
+export function WorkspaceStrip({ workspace: ws, models, modes, onModeChange, children }: StripProps) {
   const byFile = new Map(models.map((m) => [m.file, m]));
   const fixed = ws.loras;
   const optional = ws.optionalLoras.filter((o) => !fixed.some((f) => f.file === o.file));
@@ -89,6 +91,7 @@ export function WorkspaceStrip({ workspace: ws, models, modes, onModeChange }: S
           </button>
         );
       })}
+      {children && <span className="ws-strip-end">{children}</span>}
     </div>
   );
 }

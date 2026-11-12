@@ -140,7 +140,7 @@ const ollama = createServer(async (req, res) => {
           batch_size: night ? 2 : 1,
           seed: null,
           loras: [{ file: 'watercolor_style_pony.safetensors', strength: 0.7 }],
-          comment: night ? 'Mesma cena, agora à noite com lua cheia — 2 variações.' : 'Guerreira élfica ao pôr do sol, com a LoRA de aquarela.',
+          comment: night ? 'Mesma cena, agora à noite com lua cheia, em 16:9 — 2 variações.' : 'Guerreira élfica ao pôr do sol, com a LoRA de aquarela.',
           refused: false,
         }),
       },
@@ -243,7 +243,8 @@ await gen.locator('.gallery img').first().waitFor({ timeout: 20000 });
 // Force the film grain LoRA for the next request (auto → sempre).
 await gen.locator('.lora-chip.optional', { hasText: 'film_grain_pony' }).click();
 await gen.locator('.lora-chip.optional.on', { hasText: 'film_grain_pony' }).waitFor();
-await gen.locator('textarea').fill('agora à noite, com lua cheia, 2 variações');
+await gen.locator('.size-picker select').waitFor();
+await gen.locator('textarea').fill('agora à noite, com lua cheia, em 16:9, 2 variações');
 await gen.locator('textarea').press('Enter');
 await win.waitForFunction(() => document.querySelectorAll('.pane:nth-of-type(2) .gallery img, .panes > section:last-child .gallery img').length >= 3, null, { timeout: 20000 });
 await win.waitForTimeout(800);
@@ -278,6 +279,8 @@ const ok =
   llmRequests.length === 2 &&
   received.length === 2 &&
   report.secondLoras.includes('film_grain_pony.safetensors') &&
+  report.latent.width === 1344 &&
+  report.latent.height === 768 &&
   !report.firstLoras.includes('film_grain_pony.safetensors');
 await app.close();
 comfy.close();

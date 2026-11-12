@@ -2,7 +2,7 @@ import { join, relative, resolve, sep, isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, safeStorage, shell } from 'electron';
 import { IMAGE_PROTOCOL, IPC } from '@shared/ipc';
-import type { ComfyStatus, DeepPartial, GenSendOptions, LlmTestResult, ModelFolder, SecretName, Settings } from '@shared/types';
+import type { ComfyStatus, DeepPartial, GenSendOptions, LlmTestResult, ModelFolder, SecretName, Settings, SizeRequest } from '@shared/types';
 import { ClaudeAgent } from './claude/agent';
 import { ComfyClient } from './comfy/client';
 import { ModelInventory } from './comfy/inventory';
@@ -189,8 +189,8 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle(IPC.genSend, (_e, text: string, opts?: GenSendOptions) => {
     void gen.send(String(text), opts ?? {}).catch((err) => console.error('generation failed:', err));
   });
-  ipcMain.handle(IPC.genRerun, (_e, entryId: string, newSeed: boolean) => {
-    void gen.rerun(entryId, newSeed !== false).catch((err) => console.error('rerun failed:', err));
+  ipcMain.handle(IPC.genRerun, (_e, entryId: string, newSeed: boolean, size?: SizeRequest) => {
+    void gen.rerun(entryId, newSeed !== false, size).catch((err) => console.error('rerun failed:', err));
   });
   ipcMain.handle(IPC.genStop, () => gen.stop());
   ipcMain.handle(IPC.genReset, () => gen.reset());

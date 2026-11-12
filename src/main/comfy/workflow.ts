@@ -16,6 +16,11 @@ export interface GenParams {
   clipSkip: number;
   loras: LoraRef[];
   filenamePrefix?: string;
+  /**
+   * Two-pass "hires fix": generate at width×height (native size), upscale the
+   * latent to the target size and refine it with a partial denoise.
+   */
+  hires?: { width: number; height: number; denoise: number; steps: number };
 }
 
 type Link = [string, number];
@@ -89,7 +94,34 @@ export function buildWorkflow(ws: Workspace, p: GenParams): ComfyGraph {
     scheduler: p.scheduler,
     denoise: 1,
   });
-  const decoded = add('VAEDecode', { samples: [sampler, 0], vae });
+  let samples: Link = [sampler, 0];
+  if (p.hires) {
+    const upscaled = add('LatentUpscale', {
+      samples,
+      upscale_method: 'nearest-exact',
+      width: p.hires.width,
+      height: p.hires.height,
+      crop: 'disabled',
+    });
+    const second = add(
+      'KSampler',
+      {
+        model,
+        positive,
+        negative,
+        latent_image: [upscaled, 0],
+        seed: p.seed,
+        steps: p.hires.steps,
+        cfg: isFlux ? 1 : p.cfg,
+        sampler_name: p.sampler,
+        scheduler: p.scheduler,
+        denoise: p.hires.denoise,
+      },
+      'Hires pass',
+    );
+    samples = [second, 0];
+  }
+  const decoded = add('VAEDecode', { samples, vae });
   add('SaveImage', { images: [decoded, 0], filename_prefix: p.filenamePrefix ?? 'atelier' });
   return g;
 }

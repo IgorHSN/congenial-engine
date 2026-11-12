@@ -16,6 +16,7 @@ import type {
   PublicSettings,
   SecretName,
   Settings,
+  SizeRequest,
   Workspace,
 } from '@shared/types';
 
@@ -60,7 +61,8 @@ const api = {
   },
   gen: {
     send: (text: string, opts?: GenSendOptions): Promise<void> => ipcRenderer.invoke(IPC.genSend, text, opts),
-    rerun: (entryId: string, newSeed = true): Promise<void> => ipcRenderer.invoke(IPC.genRerun, entryId, newSeed),
+    rerun: (entryId: string, newSeed = true, size?: SizeRequest): Promise<void> =>
+      ipcRenderer.invoke(IPC.genRerun, entryId, newSeed, size),
     stop: (): Promise<void> => ipcRenderer.invoke(IPC.genStop),
     reset: (): Promise<void> => ipcRenderer.invoke(IPC.genReset),
     history: (): Promise<GenEntry[]> => ipcRenderer.invoke(IPC.genHistory),
