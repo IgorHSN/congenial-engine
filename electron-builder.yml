@@ -1,0 +1,21 @@
+appId: dev.comfyatelier.app
+productName: Comfy Atelier
+directories:
+  buildResources: resources
+  output: release
+files:
+  - out/**
+  - package.json
+asarUnpack:
+  - resources/**
+win:
+  target: [nsis]
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+linux:
+  target: [AppImage]
+  category: Graphics
+mac:
+  target: [dmg]
+  category: public.app-category.graphics-design
