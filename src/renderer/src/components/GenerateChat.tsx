@@ -1,11 +1,31 @@
-import { useEffect, useRef, useState } from 'react';
-import type { GenEntry, GenEvent, PublicSettings, Workspace } from '@shared/types';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { AppliedLora, DownloadInfo, GenEntry, GenEvent, InstalledModel, LoraMode, PublicSettings, Workspace } from '@shared/types';
 import { BASE_MODEL_PROFILES } from '@shared/presets';
 import { api, imageUrl } from '../api';
+import { AppliedLoraChips, WorkspaceStrip } from './LoraChips';
+
+const MODES_KEY = 'atelier.loraModes';
+
+function loadModes(): Record<string, Record<string, LoraMode>> {
+  try {
+    return JSON.parse(localStorage.getItem(MODES_KEY) ?? '{}') as Record<string, Record<string, LoraMode>>;
+  } catch {
+    return {};
+  }
+}
+
+function saveModes(modes: Record<string, Record<string, LoraMode>>): void {
+  try {
+    localStorage.setItem(MODES_KEY, JSON.stringify(modes));
+  } catch {
+    /* storage unavailable: modes last for this session only */
+  }
+}
 
 interface Props {
   settings: PublicSettings;
   workspaces: Workspace[];
+  downloads: DownloadInfo[];
   onOpenSettings: () => void;
 }
 
@@ -15,13 +35,15 @@ const STAGE_LABEL = {
   generating: 'Gerando…',
 } as const;
 
-export function GenerateChat({ settings, workspaces, onOpenSettings }: Props) {
+export function GenerateChat({ settings, workspaces, downloads, onOpenSettings }: Props) {
   const [entries, setEntries] = useState<GenEntry[]>([]);
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState<keyof typeof STAGE_LABEL | undefined>();
   const [input, setInput] = useState('');
   const [raw, setRaw] = useState(false);
   const [lightbox, setLightbox] = useState<string | null>(null);
+  const [loraModels, setLoraModels] = useState<InstalledModel[]>([]);
+  const [allModes, setAllModes] = useState(loadModes);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -46,12 +68,28 @@ export function GenerateChat({ settings, workspaces, onOpenSettings }: Props) {
   const activeId = settings.generation.activeWorkspaceId ?? workspaces[0]?.id ?? '';
   const active = workspaces.find((w) => w.id === activeId);
   const llmReady = !!settings.localLlm.model;
+  const modes = allModes[activeId] ?? {};
+
+  // LoRA metadata for the strip; refreshed when the workspace changes or a download finishes.
+  const finishedDownloads = downloads.filter((d) => d.state === 'done').length;
+  const refreshModels = useCallback(() => {
+    void api.models.list('loras').then(setLoraModels);
+  }, []);
+  useEffect(refreshModels, [refreshModels, activeId, workspaces, finishedDownloads, settings.comfy.rootPath]);
+
+  const setMode = (file: string, mode: LoraMode) => {
+    setAllModes((prev) => {
+      const next = { ...prev, [activeId]: { ...(prev[activeId] ?? {}), [file]: mode } };
+      saveModes(next);
+      return next;
+    });
+  };
 
   const submit = async () => {
     const t = input.trim();
     if (!t || busy) return;
     setInput('');
-    await api.gen.send(t, { raw, workspaceId: activeId || undefined });
+    await api.gen.send(t, { raw, workspaceId: activeId || undefined, loraModes: modes });
   };
 
   const clear = async () => {
@@ -91,6 +129,8 @@ export function GenerateChat({ settings, workspaces, onOpenSettings }: Props) {
           Limpar
         </button>
       </div>
+
+      {active && <WorkspaceStrip workspace={active} models={loraModels} modes={modes} onModeChange={setMode} />}
 
       <div className="chat-body" ref={scrollRef}>
         {!llmReady && (
@@ -222,13 +262,16 @@ function EntryView({
         </div>
       )}
       {job.error && <div className="error small">{job.error}</div>}
+      <div className="result-loras small">
+        <span className="muted">LoRAs:</span>
+        <AppliedLoraChips loras={appliedOf(entry)} />
+      </div>
       <div className="result-meta small muted">
         <span>{entry.workspaceName}</span>
         <span>
           {job.width}×{job.height}
         </span>
         <span>seed {job.seed}</span>
-        {refined.loras && refined.loras.length > 0 && <span>+{refined.loras.map((l) => l.file.replace(/\.\w+$/, '')).join(', ')}</span>}
         <span className="spacer" />
         <button className="btn tiny ghost" disabled={busy} onClick={() => void api.gen.rerun(entry.id, true)}>
           Variar
@@ -255,4 +298,9 @@ function EntryView({
       )}
     </div>
   );
+}
+
+/** LoRAs of a result; older entries only recorded the ones the LLM picked. */
+function appliedOf(entry: Extract<GenEntry, { kind: 'result' }>): AppliedLora[] {
+  return entry.loras ?? (entry.refined.loras ?? []).map((l) => ({ ...l, source: 'auto' as const }));
 }

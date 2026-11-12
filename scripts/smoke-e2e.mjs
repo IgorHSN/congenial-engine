@@ -157,6 +157,8 @@ writeFileSync(join(root, 'main.py'), '');
 for (const f of ['checkpoints', 'loras']) mkdirSync(join(root, 'models', f), { recursive: true });
 writeFileSync(join(root, 'models/checkpoints/ponyDiffusionV6XL.safetensors'), 'x');
 writeFileSync(join(root, 'models/loras/watercolor_style_pony.safetensors'), 'x');
+writeFileSync(join(root, 'models/loras/detail_tweaker_xl.safetensors'), 'x');
+writeFileSync(join(root, 'models/loras/film_grain_pony.safetensors'), 'x');
 const outDir = join(userData, 'images');
 writeFileSync(
   join(userData, 'settings.json'),
@@ -169,14 +171,19 @@ writeFileSync(
 writeFileSync(join(userData, 'secrets.json'), JSON.stringify({ anthropicApiKey: { enc: false, value: 'sk-ant-demo' } }));
 writeFileSync(
   join(userData, 'models.json'),
-  JSON.stringify({ 'loras/watercolor_style_pony.safetensors': { baseModel: 'pony', triggerWords: ['wtrcolor'], description: 'watercolor painting style' } }),
+  JSON.stringify({
+    'loras/watercolor_style_pony.safetensors': { baseModel: 'pony', triggerWords: ['wtrcolor'], description: 'watercolor painting style' },
+    'loras/detail_tweaker_xl.safetensors': { baseModel: 'sdxl', description: 'adds fine detail' },
+    'loras/film_grain_pony.safetensors': { baseModel: 'pony', triggerWords: ['film grain'], description: 'analog film grain look' },
+  }),
 );
 writeFileSync(
   join(userData, 'workspaces.json'),
   JSON.stringify([
     {
       id: 'ws-demo', name: 'Pony · Fantasia', description: '', baseModel: 'pony', pipeline: 'checkpoint',
-      checkpoint: 'ponyDiffusionV6XL.safetensors', loras: [], optionalLoras: [{ file: 'watercolor_style_pony.safetensors', strength: 0.8 }],
+      checkpoint: 'ponyDiffusionV6XL.safetensors', loras: [{ file: 'detail_tweaker_xl.safetensors', strength: 0.6 }],
+      optionalLoras: [{ file: 'watercolor_style_pony.safetensors', strength: 0.8 }, { file: 'film_grain_pony.safetensors', strength: 0.5 }],
       defaults: { width: 1024, height: 1024, steps: 28, cfg: 7, sampler: 'euler_ancestral', scheduler: 'normal', batchSize: 1, clipSkip: 2, guidance: 3.5 },
       positivePrefix: 'score_9, score_8_up, score_7_up', negativePrompt: 'score_4, score_5, score_6, worst quality, low quality',
       refinerNotes: 'fantasy illustration', createdAt: '', updatedAt: '',
@@ -233,6 +240,9 @@ const gen = win.locator('.pane').nth(1);
 await gen.locator('textarea').fill('uma guerreira élfica no penhasco ao pôr do sol, estilo aquarela');
 await gen.locator('textarea').press('Enter');
 await gen.locator('.gallery img').first().waitFor({ timeout: 20000 });
+// Force the film grain LoRA for the next request (auto → sempre).
+await gen.locator('.lora-chip.optional', { hasText: 'film_grain_pony' }).click();
+await gen.locator('.lora-chip.optional.on', { hasText: 'film_grain_pony' }).waitFor();
 await gen.locator('textarea').fill('agora à noite, com lua cheia, 2 variações');
 await gen.locator('textarea').press('Enter');
 await win.waitForFunction(() => document.querySelectorAll('.pane:nth-of-type(2) .gallery img, .panes > section:last-child .gallery img').length >= 3, null, { timeout: 20000 });
@@ -247,7 +257,12 @@ await win.locator('button', { hasText: 'Testar / listar' }).click();
 await win.waitForSelector('text=Conectado · 2 modelo(s)');
 await win.screenshot({ path: join(OUT, 'screenshot-settings.png') });
 
+const lorasOf = (p) => Object.values(p).filter((x) => x.class_type === 'LoraLoader').map((x) => x.inputs.lora_name);
+const appliedChips = await win.evaluate(() => [...document.querySelectorAll('.result:last-of-type .lora-chip.applied')].map((c) => c.textContent));
 const report = {
+  firstLoras: lorasOf(received[0]),
+  secondLoras: lorasOf(received.at(-1)),
+  appliedChips,
   decodedWidths: decoded,
   llmCalls: llmRequests.length,
   lastLlmMessages: llmRequests.at(-1).messages.map((m) => m.role),
@@ -257,7 +272,13 @@ const report = {
   errors,
 };
 console.log(JSON.stringify(report, null, 1));
-const ok = errors.length === 0 && decoded.every((w) => w > 0) && llmRequests.length === 2 && received.length === 2;
+const ok =
+  errors.length === 0 &&
+  decoded.every((w) => w > 0) &&
+  llmRequests.length === 2 &&
+  received.length === 2 &&
+  report.secondLoras.includes('film_grain_pony.safetensors') &&
+  !report.firstLoras.includes('film_grain_pony.safetensors');
 await app.close();
 comfy.close();
 ollama.close();

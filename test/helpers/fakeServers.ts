@@ -32,7 +32,7 @@ export interface FakeComfy {
 }
 
 /** A tiny stand-in for the ComfyUI server: /prompt, /history, /view, /ws, /system_stats. */
-export async function startFakeComfy(opts: { failValidation?: boolean } = {}): Promise<FakeComfy> {
+export async function startFakeComfy(opts: { failValidation?: boolean; folderPaths?: Record<string, string[]> } = {}): Promise<FakeComfy> {
   const prompts: FakeComfy['prompts'] = [];
   const history = new Map<string, unknown>();
   const sockets = new Map<string, WebSocket>();
@@ -47,6 +47,9 @@ export async function startFakeComfy(opts: { failValidation?: boolean } = {}): P
       });
     }
     if (url.pathname === '/queue') return sendJson(res, 200, { queue_running: [], queue_pending: [] });
+    if (url.pathname === '/internal/folder_paths') {
+      return opts.folderPaths ? sendJson(res, 200, opts.folderPaths) : sendJson(res, 404, {});
+    }
     if (url.pathname === '/object_info/KSampler') {
       return sendJson(res, 200, {
         KSampler: {

@@ -6,6 +6,7 @@ export const IPC = {
   settingsSetSecret: 'settings:set-secret',
   settingsPickDirectory: 'settings:pick-directory',
   settingsDetectComfy: 'settings:detect-comfy',
+  settingsAutoDetect: 'settings:auto-detect',
   settingsChanged: 'settings:changed',
 
   comfyStatus: 'comfy:status',

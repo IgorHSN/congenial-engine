@@ -6,6 +6,7 @@ import type { ComfyStatus, DeepPartial, GenSendOptions, LlmTestResult, ModelFold
 import { ClaudeAgent } from './claude/agent';
 import { ComfyClient } from './comfy/client';
 import { ModelInventory } from './comfy/inventory';
+import { detectComfy } from './comfy/detect';
 import { detectComfyLayout } from './comfy/paths';
 import { ComfyProcess } from './comfy/process';
 import { LocalLlm } from './generation/llm';
@@ -44,10 +45,15 @@ async function bootstrap(): Promise<void> {
 
   const comfy = new ComfyClient(() => cfg().comfy.url);
   const proc = new ComfyProcess(cfg);
-  const inventory = new ModelInventory(dataDir, () => {
-    const root = cfg().comfy.rootPath;
-    return root ? (detectComfyLayout(root)?.root ?? root) : '';
-  });
+  const inventory = new ModelInventory(
+    dataDir,
+    () => {
+      const root = cfg().comfy.rootPath;
+      return root ? (detectComfyLayout(root)?.root ?? root) : '';
+    },
+    () => comfy.folderPaths(),
+  );
+  settings.onChange(() => inventory.directories.invalidate());
   const workspaces = new WorkspaceStore(dataDir);
   await workspaces.load();
   const downloader = new Downloader();
@@ -155,6 +161,7 @@ async function bootstrap(): Promise<void> {
     return res.canceled ? null : (res.filePaths[0] ?? null);
   });
   ipcMain.handle(IPC.settingsDetectComfy, (_e, path: string) => detectComfyLayout(path));
+  ipcMain.handle(IPC.settingsAutoDetect, () => detectComfy(cfg().comfy.url));
 
   ipcMain.handle(IPC.comfyStatus, () => computeStatus());
   ipcMain.handle(IPC.comfyStart, () => {

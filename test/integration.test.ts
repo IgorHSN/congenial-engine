@@ -119,6 +119,7 @@ describe('generation chat end-to-end (fake Ollama + fake ComfyUI)', () => {
     expect(result.job.images).toHaveLength(2);
     for (const p of result.job.images) expect(readFileSync(p).equals(TINY_PNG)).toBe(true);
     expect(result.refined.comment).toContain('élfica');
+    expect(result.loras).toEqual([{ file: 'watercolor.safetensors', strength: 0.7, source: 'auto' }]);
     expect(t.events.some((e) => e.type === 'entry-update' && e.entry.kind === 'result' && e.entry.job.progress > 0)).toBe(true);
 
     // Iteration: the second request carries the previous turn as assistant JSON
@@ -169,6 +170,47 @@ describe('generation chat end-to-end (fake Ollama + fake ComfyUI)', () => {
       .filter((n) => n.class_type === 'CLIPTextEncode')
       .map((n) => n.inputs.text);
     expect(texts[0]).toBe('score_9, score_8_up, score_7_up, 1girl, solo, smile');
+  });
+});
+
+describe('LoRA modes in the generation chat', () => {
+  const loraNodes = (prompt: Record<string, { class_type: string; inputs: Record<string, unknown> }>) =>
+    Object.values(prompt).filter((n) => n.class_type === 'LoraLoader').map((n) => n.inputs.lora_name);
+
+  it('"off" removes an optional LoRA even if the LLM picks it', async () => {
+    const t = await setup();
+    await t.session.send('aquarela', { loraModes: { 'watercolor.safetensors': 'off' } });
+    expect(t.ollama.requests[0].messages[0].content).toContain('No optional LoRAs are available');
+    expect(loraNodes(t.comfyServer.prompts[0])).toEqual([]);
+    const r = t.session.history().find((e) => e.kind === 'result');
+    expect(r && r.kind === 'result' && r.loras).toEqual([]);
+  });
+
+  it('"on" forces an optional LoRA and adds its trigger word', async () => {
+    const t = await setup({
+      llmReply: () => JSON.stringify({ positive: '1girl, beach', negative: '', aspect: 'square', loras: [], comment: 'ok', refused: false }),
+    });
+    await t.session.send('praia', { loraModes: { 'watercolor.safetensors': 'on' } });
+    const system = t.ollama.requests[0].messages[0].content;
+    expect(system).toMatch(/ALWAYS applied[\s\S]*watercolor\.safetensors/);
+    expect(loraNodes(t.comfyServer.prompts[0])).toEqual(['watercolor.safetensors']);
+    const r = t.session.history().find((e) => e.kind === 'result');
+    expect(r && r.kind === 'result' && r.loras).toEqual([{ file: 'watercolor.safetensors', strength: 0.8, source: 'forced' }]);
+    expect(r && r.kind === 'result' && r.finalPositive).toContain('wtrcolor');
+  });
+
+  it('can switch off a fixed workspace LoRA, and reruns reuse the same LoRAs', async () => {
+    const t = await setup({
+      llmReply: () => JSON.stringify({ positive: '1girl', negative: '', aspect: 'square', comment: 'ok', refused: false }),
+    });
+    const ws = await t.workspaces.save({ id: t.ws.id, name: t.ws.name, baseModel: 'pony', loras: [{ file: 'watercolor.safetensors', strength: 0.5 }] });
+    await t.session.send('x', { workspaceId: ws.id });
+    expect(loraNodes(t.comfyServer.prompts[0])).toEqual(['watercolor.safetensors']);
+    await t.session.send('y', { workspaceId: ws.id, loraModes: { 'watercolor.safetensors': 'off' } });
+    expect(loraNodes(t.comfyServer.prompts[1])).toEqual([]);
+    const first = t.session.history().find((e) => e.kind === 'result')!;
+    await t.session.rerun(first.id);
+    expect(loraNodes(t.comfyServer.prompts[2])).toEqual(['watercolor.safetensors']);
   });
 });
 
@@ -335,6 +377,41 @@ describe('Claude tools', () => {
     const out = await run('delete_model', { folder: 'loras', file: 'watercolor.safetensors' }, ctx);
     expect(out).toMatch(/^USER_DENIED/);
     expect(existsSync(join(t.root, 'models', 'loras', 'watercolor.safetensors'))).toBe(true);
+  });
+
+  it('imports saved workflows and identifies local models', async () => {
+    const { t, ctx } = await toolCtx(true);
+    const wfDir = join(t.root, 'user', 'default', 'workflows', 'anime');
+    mkdirSync(wfDir, { recursive: true });
+    writeFileSync(
+      join(wfDir, 'meu fluxo.json'),
+      JSON.stringify({
+        nodes: [
+          { id: 1, type: 'CheckpointLoaderSimple', widgets_values: ['ponyV6.safetensors'] },
+          { id: 2, type: 'LoraLoader', widgets_values: ['watercolor.safetensors', 0.9, 0.9] },
+          { id: 3, type: 'KSampler', widgets_values: [1, 'fixed', 30, 7, 'euler_ancestral', 'normal', 1] },
+        ],
+        links: [],
+      }),
+    );
+    const list = JSON.parse((await run('list_comfy_workflows', {}, ctx)) as string);
+    expect(list[0].name).toBe('anime/meu fluxo.json');
+    const summary = JSON.parse((await run('read_comfy_workflow', { name: 'anime/meu fluxo.json' }, ctx)) as string);
+    expect(summary).toMatchObject({ format: 'ui', standardPipeline: true, extracted: { checkpoint: 'ponyV6.safetensors' } });
+    await expect(run('read_comfy_workflow', { name: '../../../etc/passwd.json' }, ctx)).rejects.toThrow();
+
+    const civitai = {
+      versionByHash: async (hash: string) => {
+        if (!hash) throw new Error('no');
+        return { id: 9, modelId: 8, name: 'v1', baseModel: 'Pony', trainedWords: ['wc'], files: [], model: { name: 'Watercolor', type: 'LORA', nsfw: false } };
+      },
+    } as unknown as CivitaiClient;
+    const res = JSON.parse((await run('identify_local_models', { folder: 'loras' }, { ...ctx, civitai })) as string);
+    expect(res.results).toEqual([{ file: 'watercolor.safetensors', found: true, name: 'Watercolor', baseModel: 'pony', triggerWords: ['wc'] }]);
+    expect((await t.inventory.getMeta('loras', 'watercolor.safetensors')).source?.civitaiVersionId).toBe(9);
+    // only_missing skips it the second time
+    const again = JSON.parse((await run('identify_local_models', { folder: 'loras' }, { ...ctx, civitai })) as string);
+    expect(again.processed).toBe(0);
   });
 
   it('comfy_node_info describes combo inputs', async () => {

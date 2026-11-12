@@ -708,3 +708,113 @@ input[type='range'] {
     grid-template-columns: 1fr 1px 1fr;
   }
 }
+
+/* ---------- workspace strip & LoRA chips */
+.ws-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.ws-model {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-model-label {
+  color: var(--accent);
+  font-weight: 600;
+}
+.lora-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+  max-width: 260px;
+  white-space: nowrap;
+}
+.lora-chip.applied {
+  cursor: default;
+}
+.lora-strength {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.lora-mode {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--border);
+  color: var(--muted);
+}
+.lora-chip.fixed.on,
+.lora-chip.applied.workspace {
+  border-color: rgba(60, 207, 145, 0.45);
+}
+.lora-chip.fixed.on .lora-mode,
+.lora-chip.applied.workspace .lora-mode {
+  background: rgba(60, 207, 145, 0.16);
+  color: var(--ok);
+}
+.lora-chip.optional.auto {
+  border-style: dashed;
+}
+.lora-chip.optional.on,
+.lora-chip.applied.forced {
+  border-color: var(--accent-2);
+  background: rgba(139, 124, 246, 0.14);
+}
+.lora-chip.optional.on .lora-mode,
+.lora-chip.applied.forced .lora-mode {
+  background: var(--accent-2);
+  color: white;
+}
+.lora-chip.applied.auto .lora-mode {
+  background: rgba(242, 184, 75, 0.16);
+  color: var(--warn);
+}
+.lora-chip.off {
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+.lora-chip.warn {
+  border-color: var(--warn);
+}
+.result-loras {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.applied-loras {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.detect-row {
+  align-items: center;
+  margin-top: 10px;
+}
+.pre-line {
+  white-space: pre-line;
+}

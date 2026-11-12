@@ -71,6 +71,21 @@ export class ComfyClient {
     return { running: q.queue_running?.length ?? 0, pending: q.queue_pending?.length ?? 0 };
   }
 
+  /**
+   * Every model directory the server searches, per folder name (includes
+   * extra_model_paths.yaml and --models-directory). Internal frontend route.
+   */
+  async folderPaths(): Promise<Record<string, string[]>> {
+    const res = await this.request<Record<string, unknown>>('/internal/folder_paths', { timeoutMs: 4000 });
+    const out: Record<string, string[]> = {};
+    for (const [k, v] of Object.entries(res ?? {})) {
+      // Current servers return a list of dirs; tolerate the [dirs, extensions] tuple too.
+      const dirs = Array.isArray(v) && Array.isArray(v[0]) ? v[0] : v;
+      if (Array.isArray(dirs)) out[k] = dirs.filter((d): d is string => typeof d === 'string');
+    }
+    return out;
+  }
+
   objectInfo(nodeClass?: string): Promise<Record<string, NodeInfo>> {
     const path = nodeClass ? `/object_info/${encodeURIComponent(nodeClass)}` : '/object_info';
     return this.request(path, { timeoutMs: 30000 });

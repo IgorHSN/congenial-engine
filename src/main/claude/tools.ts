@@ -5,7 +5,8 @@ import { z } from 'zod';
 import { BASE_MODELS, MODEL_FOLDERS, type ApprovalRequest, type ModelFolder, type Settings } from '@shared/types';
 import type { ComfyClient } from '../comfy/client';
 import type { ModelInventory } from '../comfy/inventory';
-import { detectComfyLayout, modelsDir, safeJoin, sanitizeFileName } from '../comfy/paths';
+import { detectComfyLayout, safeJoin, sanitizeFileName } from '../comfy/paths';
+import { listWorkflows, readWorkflowFile, resolveWorkflowPath, summarizeWorkflow } from '../comfy/workflows';
 import type { ComfyProcess } from '../comfy/process';
 import { buildWorkflow, randomSeed } from '../comfy/workflow';
 import { runProcess } from '../proc';
@@ -115,10 +116,17 @@ export const TOOLS = [
         out.reachable = false;
         out.error = (err as Error).message;
       }
-      if (layout?.hasModels) {
+      if (s.comfy.rootPath) {
         const counts: Record<string, number> = {};
-        for (const m of await ctx.inventory.list()) counts[m.folder] = (counts[m.folder] ?? 0) + 1;
+        for (const m of await ctx.inventory.list().catch(() => [])) counts[m.folder] = (counts[m.folder] ?? 0) + 1;
         out.modelCounts = counts;
+        const extra: Record<string, string[]> = {};
+        for (const [folder, dirs] of Object.entries(await ctx.inventory.directories.all())) {
+          const more = dirs.slice(1).filter((d) => !d.startsWith(ctx.inventory.primaryDir(folder as ModelFolder)));
+          if (more.length) extra[folder] = more;
+        }
+        if (Object.keys(extra).length) out.extraModelDirs = extra;
+        out.savedWorkflows = (await listWorkflows(layout?.root ?? s.comfy.rootPath).catch(() => [])).length;
       }
       return json(out);
     },
@@ -127,8 +135,10 @@ export const TOOLS = [
   tool({
     name: 'list_models',
     description:
-      'List model files installed in ComfyUI (from disk), with size and any metadata the app knows (base model, trigger words, ' +
-      'recommended strength, source). Use the "file" values exactly as returned when building workspaces.',
+      'List model files ComfyUI can see (models/ plus extra_model_paths.yaml folders), with size and metadata: base model, trigger words, ' +
+      'recommended strength, source. baseModelGuessedFrom means it was auto-detected offline (safetensors header, sidecar files from ' +
+      'Civitai Helper / LoRA Manager / A1111, or the file name) and may be imprecise; trainingTags are frequent caption tags, not ' +
+      'confirmed triggers. Use the "file" values exactly as returned when building workspaces.',
     schema: z.object({
       folder: folderEnum.optional().describe('Only this folder (e.g. checkpoints, loras). Omit for all.'),
       search: z.string().optional().describe('Case-insensitive substring filter on the file name'),
@@ -137,6 +147,7 @@ export const TOOLS = [
       requireRoot(ctx);
       let items = await ctx.inventory.list(folder);
       if (search) items = items.filter((m) => m.file.toLowerCase().includes(search.toLowerCase()));
+      const primary = (f: ModelFolder) => ctx.inventory.primaryDir(f);
       return json({
         count: items.length,
         models: items.slice(0, 200).map((m) => ({
@@ -144,10 +155,13 @@ export const TOOLS = [
           file: m.file,
           sizeMB: mb(m.sizeBytes),
           baseModel: m.meta.baseModel,
+          baseModelGuessedFrom: m.meta.detectedFrom,
           triggerWords: m.meta.triggerWords?.slice(0, 8),
+          trainingTags: m.meta.triggerWords?.length ? undefined : m.meta.trainingTags,
           recommendedStrength: m.meta.recommendedStrength,
           description: m.meta.description?.slice(0, 160),
           source: m.meta.source?.url,
+          location: m.path.startsWith(primary(m.folder)) ? undefined : m.path,
         })),
         truncated: items.length > 200,
       });
@@ -253,7 +267,7 @@ export const TOOLS = [
       nsfw: z.boolean().optional(),
     }),
     run: async (input, ctx) => {
-      const root = requireRoot(ctx);
+      requireRoot(ctx);
       let url: string;
       let fileName: string;
       let folder: ModelFolder | undefined = input.folder;
@@ -318,8 +332,8 @@ export const TOOLS = [
 
       const safeName = sanitizeFileName(fileName);
       const rel = input.subfolder ? `${input.subfolder.replace(/^[\\/]+|[\\/]+$/g, '')}/${safeName}` : safeName;
-      const dest = safeJoin(modelsDir(root, folder), rel);
-      if (existsSync(dest)) {
+      const dest = safeJoin(ctx.inventory.primaryDir(folder), rel);
+      if (existsSync(dest) || (await ctx.inventory.exists(folder, rel))) {
         await ctx.inventory.setMeta(folder, rel, { ...meta, sha256, addedAt: new Date().toISOString() });
         return json({ status: 'already_installed', folder, file: rel, note: 'Metadata updated.' });
       }
@@ -392,33 +406,79 @@ export const TOOLS = [
   }),
 
   tool({
-    name: 'identify_local_model',
+    name: 'identify_local_models',
     description:
-      'Identify a model file the user already had (not downloaded by the app): hashes it (SHA-256, may take ~10-30 s for big files) ' +
-      'and looks it up on Civitai to fill base model and trigger words.',
-    schema: z.object({ folder: folderEnum, file: z.string() }),
-    run: async ({ folder, file }, ctx) => {
+      'Identify model files the user already had: hashes each file (SHA-256, ~5-30 s per GB) and looks it up on Civitai to record ' +
+      'the exact base model, trigger words and source. Pass specific files, or a folder to process every file there that has no ' +
+      'Civitai source yet. Files not found on Civitai keep their offline guesses.',
+    schema: z.object({
+      folder: folderEnum.optional().describe('Folder to scan (default loras)'),
+      files: z.array(z.string()).optional().describe('Specific files in that folder; omit to process the folder'),
+      only_missing: z.boolean().optional().describe('Skip files that already have a Civitai source (default true)'),
+      max: z.number().int().min(1).max(200).optional().describe('Max files this call (default 25)'),
+    }),
+    run: async ({ folder = 'loras', files, only_missing, max }, ctx) => {
       requireRoot(ctx);
-      const sha256 = await ctx.inventory.sha256(folder, file);
-      try {
-        const v = await ctx.civitai.versionByHash(sha256);
-        const meta = await ctx.inventory.setMeta(folder, file, {
-          sha256,
-          baseModel: civitaiBaseModel(v.baseModel),
-          triggerWords: v.trainedWords?.length ? v.trainedWords : undefined,
-          nsfw: v.model?.nsfw,
-          source: {
-            kind: 'civitai',
-            url: `https://civitai.com/models/${v.modelId}?modelVersionId=${v.id}`,
-            civitaiModelId: v.modelId,
-            civitaiVersionId: v.id,
-          },
-        });
-        return json({ found: true, name: v.model?.name, version: v.name, baseModel: v.baseModel, meta });
-      } catch {
-        await ctx.inventory.setMeta(folder, file, { sha256 });
-        return json({ found: false, sha256, autoV2: sha256.slice(0, 10).toUpperCase(), note: 'Not found on Civitai. Ask the user or set metadata manually.' });
+      const all = await ctx.inventory.list(folder);
+      let targets = files ? all.filter((m) => files.includes(m.file)) : all;
+      if (only_missing !== false) targets = targets.filter((m) => m.meta.source?.kind !== 'civitai');
+      const limit = max ?? 25;
+      const pending = targets.length - Math.min(targets.length, limit);
+      const results = [];
+      for (const m of targets.slice(0, limit)) {
+        if (ctx.signal.aborted) break;
+        try {
+          const sha256 = await ctx.inventory.sha256(folder, m.file);
+          try {
+            const v = await ctx.civitai.versionByHash(sha256);
+            const meta = await ctx.inventory.setMeta(folder, m.file, {
+              sha256,
+              baseModel: civitaiBaseModel(v.baseModel),
+              triggerWords: v.trainedWords?.length ? v.trainedWords : undefined,
+              nsfw: v.model?.nsfw,
+              description: v.model?.name ? `${v.model.name} — ${v.name}` : undefined,
+              source: {
+                kind: 'civitai',
+                url: `https://civitai.com/models/${v.modelId}?modelVersionId=${v.id}`,
+                civitaiModelId: v.modelId,
+                civitaiVersionId: v.id,
+              },
+            });
+            results.push({ file: m.file, found: true, name: v.model?.name, baseModel: meta.baseModel, triggerWords: meta.triggerWords?.slice(0, 6) });
+          } catch {
+            await ctx.inventory.setMeta(folder, m.file, { sha256 });
+            results.push({ file: m.file, found: false, guessedBaseModel: m.meta.baseModel, trainingTags: m.meta.trainingTags });
+          }
+        } catch (err) {
+          results.push({ file: m.file, error: (err as Error).message });
+        }
       }
+      return json({ processed: results.length, remaining: pending, results });
+    },
+  }),
+
+  tool({
+    name: 'list_comfy_workflows',
+    description:
+      'List the workflows the user saved in ComfyUI (user/default/workflows), newest first. Use it to offer importing their ' +
+      'existing setups as workspaces.',
+    schema: z.object({}),
+    run: async (_i, ctx) => {
+      const items = await listWorkflows(requireRoot(ctx));
+      return json(items.length ? items : { workflows: [], note: 'No saved workflows found in user/default/workflows.' });
+    },
+  }),
+
+  tool({
+    name: 'read_comfy_workflow',
+    description:
+      'Read a ComfyUI workflow (a name from list_comfy_workflows, or an absolute path to a .json such as an "Export (API)" file) and ' +
+      'summarize it: checkpoint/unet/encoders/VAE, LoRAs with strengths (incl. LoRA stacks), sampler, steps, cfg, size, clip skip, ' +
+      'prompts and which nodes are non-standard. API-format files also return the JSON for a custom workspace.',
+    schema: z.object({ name: z.string().describe('Workflow name or absolute .json path') }),
+    run: async ({ name }, ctx) => {
+      const path = resolveWorkflowPath(requireRoot(ctx), name);
+      return json(summarizeWorkflow(await readWorkflowFile(path)));
     },
   }),
 

@@ -1,7 +1,18 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { BASE_MODEL_PROFILES, SAFETY_NEGATIVE, sizeFor } from '@shared/presets';
-import type { GenEntry, GenEvent, GenSendOptions, GenerationJob, RefinedPrompt, Settings, Workspace } from '@shared/types';
+import type {
+  AppliedLora,
+  GenEntry,
+  GenEvent,
+  GenSendOptions,
+  GenerationJob,
+  LoraMode,
+  LoraRef,
+  RefinedPrompt,
+  Settings,
+  Workspace,
+} from '@shared/types';
 import type { ComfyClient } from '../comfy/client';
 import type { ModelInventory } from '../comfy/inventory';
 import { buildWorkflow, randomSeed } from '../comfy/workflow';
@@ -127,18 +138,20 @@ export class GenerationSession {
     const signal = this.controller.signal;
     this.setBusy(true, raw ? 'queueing' : 'refining');
     try {
+      const split = splitLoras(ws, opts.loraModes);
       let refined: RefinedPrompt;
       if (raw) {
         refined = { positive: userText, negative: '', loras: [], comment: 'Prompt enviado sem refinamento.' };
       } else {
-        const result = await this.refine(ws, userText, signal);
+        const result = await this.refine(ws, userText, split, signal);
         if (result.refused) {
           this.notice('warning', result.reason);
           return;
         }
         refined = result.prompt;
       }
-      await this.generate(ws, userText, refined, signal);
+      const applied: AppliedLora[] = [...split.always, ...(refined.loras ?? []).map((l) => ({ ...l, source: 'auto' as const }))];
+      await this.generate(ws, userText, refined, signal, applied);
     } catch (err) {
       if (signal.aborted) this.notice('info', 'Cancelado.');
       else this.notice('error', (err as Error).message);
@@ -162,7 +175,13 @@ export class GenerationSession {
     this.setBusy(true, 'queueing');
     try {
       const refined: RefinedPrompt = { ...prev.refined, seed: newSeed ? undefined : prev.job.seed };
-      await this.generate(ws, '', refined, this.controller.signal, prev);
+      const applied: AppliedLora[] =
+        prev.loras ??
+        [
+          ...ws.loras.map((l) => ({ ...l, source: 'workspace' as const })),
+          ...(prev.refined.loras ?? []).map((l) => ({ ...l, source: 'auto' as const })),
+        ];
+      await this.generate(ws, '', refined, this.controller.signal, applied, prev);
     } catch (err) {
       if (this.controller?.signal.aborted) this.notice('info', 'Cancelado.');
       else this.notice('error', (err as Error).message);
@@ -172,12 +191,12 @@ export class GenerationSession {
     }
   }
 
-  private async refine(ws: Workspace, userText: string, signal: AbortSignal) {
+  private async refine(ws: Workspace, userText: string, split: LoraSplit, signal: AbortSignal) {
     const inventory = await this.d.inventory.list('loras').catch(() => []);
     const system = buildRefinerSystemPrompt({
       workspace: ws,
-      fixedLoras: loraContext(ws.loras, inventory),
-      optionalLoras: loraContext(ws.optionalLoras, inventory),
+      fixedLoras: loraContext(split.always, inventory),
+      optionalLoras: loraContext(split.candidates, inventory),
     });
     const turns: HistoryTurn[] = [];
     let pendingUser: string | null = null;
@@ -194,7 +213,7 @@ export class GenerationSession {
     for (let attempt = 0; attempt < 2; attempt++) {
       const raw = await this.d.llm.chatJson(messages, REFINED_SCHEMA as unknown as Record<string, unknown>, signal);
       try {
-        return parseRefined(raw, ws.optionalLoras);
+        return parseRefined(raw, split.candidates);
       } catch (err) {
         if (!(err instanceof RefinerParseError)) throw err;
         lastErr = err;
@@ -208,18 +227,20 @@ export class GenerationSession {
     userText: string,
     refined: RefinedPrompt,
     signal: AbortSignal,
+    applied: AppliedLora[],
     basedOn?: Extract<GenEntry, { kind: 'result' }>,
   ): Promise<void> {
     const profile = BASE_MODEL_PROFILES[ws.baseModel] ?? BASE_MODEL_PROFILES.other;
     const d = ws.defaults;
 
-    const loras = [...ws.loras, ...(refined.loras ?? [])];
-    // Make sure single-trigger optional LoRAs get their trigger word.
+    const loras: LoraRef[] = applied.map(({ file, strength }) => ({ file, strength }));
+    // Make sure LoRAs with a single trigger word get it, even if the LLM forgot.
     const inventory = await this.d.inventory.list('loras').catch(() => []);
     const extraTriggers: string[] = [];
-    for (const l of refined.loras ?? []) {
+    const prefixAndPrompt = `${ws.positivePrefix} ${refined.positive}`.toLowerCase();
+    for (const l of applied) {
       const tw = inventory.find((m) => m.file === l.file)?.meta.triggerWords;
-      if (tw?.length === 1 && !refined.positive.toLowerCase().includes(tw[0].toLowerCase())) extraTriggers.push(tw[0]);
+      if (tw?.length === 1 && !prefixAndPrompt.includes(tw[0].toLowerCase())) extraTriggers.push(tw[0]);
     }
 
     const finalPositive = joinPrompt(ws.positivePrefix, ...extraTriggers, refined.positive);
@@ -260,6 +281,7 @@ export class GenerationSession {
       refined: basedOn ? { ...basedOn.refined, seed: refined.seed } : refined,
       finalPositive,
       finalNegative,
+      loras: applied,
       job,
     };
     this.push(entry);
@@ -328,4 +350,25 @@ function scaleToWorkspace(
   const w = h * ratio;
   const round = (n: number) => Math.max(64, Math.round(n / 64) * 64);
   return { width: round(w), height: round(h) };
+}
+
+export interface LoraSplit {
+  /** Applied no matter what: workspace LoRAs not switched off + optional ones the user forced on. */
+  always: AppliedLora[];
+  /** Optional LoRAs in "auto": the local LLM decides. */
+  candidates: LoraRef[];
+}
+
+/** Apply the user's per-LoRA choices from the generation chat to a workspace. */
+export function splitLoras(ws: Workspace, modes: Record<string, LoraMode> = {}): LoraSplit {
+  const always: AppliedLora[] = [];
+  const candidates: LoraRef[] = [];
+  for (const l of ws.loras) if (modes[l.file] !== 'off') always.push({ ...l, source: 'workspace' });
+  for (const l of ws.optionalLoras) {
+    if (ws.loras.some((f) => f.file === l.file)) continue;
+    const mode = modes[l.file] ?? 'auto';
+    if (mode === 'on') always.push({ ...l, source: 'forced' });
+    else if (mode === 'auto') candidates.push(l);
+  }
+  return { always, candidates };
 }

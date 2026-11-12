@@ -3,6 +3,7 @@ import { IPC } from '@shared/ipc';
 import type {
   ClaudeEvent,
   ClaudeItem,
+  ComfyDetection,
   ComfyStatus,
   DeepPartial,
   DownloadInfo,
@@ -35,6 +36,7 @@ const api = {
       path: string,
     ): Promise<{ root: string; python: string | null; kind: string; hasMainPy: boolean; hasModels: boolean } | null> =>
       ipcRenderer.invoke(IPC.settingsDetectComfy, path),
+    autoDetect: (): Promise<ComfyDetection> => ipcRenderer.invoke(IPC.settingsAutoDetect),
     onChange: (cb: (s: PublicSettings) => void) => on(IPC.settingsChanged, cb),
   },
   comfy: {

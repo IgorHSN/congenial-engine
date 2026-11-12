@@ -29,6 +29,11 @@ App desktop (Electron) que fica em cima do [ComfyUI](https://github.com/comfyano
 - **Os pedidos de imagem nunca passam pela Anthropic.** O chat de geração fala só com o LLM local e com o ComfyUI. O Claude cuida apenas da configuração e não vê esse chat.
 - Um **workspace** é um preset: modelo base (SD1.5, SDXL, Pony, Illustrious, NoobAI, Flux, SD3.5), checkpoint ou trio Flux (unet + encoders + VAE), LoRAs fixas, LoRAs opcionais, sampler/scheduler/steps/CFG/resolução, prefixo e negativo padrão e notas de estilo para o LLM local. O Claude cria e testa os workspaces; você escolhe o ativo no chat de geração.
 - O LLM local recebe as regras de prompt da família do modelo (tags danbooru + `score_*` no Pony, tags no Illustrious/NoobAI, linguagem natural no Flux…), as palavras-gatilho das LoRAs e pode **escolher LoRAs opcionais** quando o pedido pede (ex.: "estilo aquarela" ativa a LoRA de aquarela).
+- **LoRAs à vista no chat de geração:** uma faixa no topo mostra o modelo do workspace e as LoRAs dele. Clique numa LoRA para mudar como ela é usada:
+  - LoRA *fixa* do workspace: **fixa** ↔ **desligada**
+  - LoRA *opcional*: **auto** (o LLM decide) → **sempre** → **nunca**
+
+  Passe o mouse para ver gatilhos, modelo base e um aviso ⚠ quando a LoRA não combina com o modelo (ex.: LoRA de SD1.5 num workspace SDXL). Cada imagem gerada mostra as LoRAs aplicadas, com força e origem: *fixa*, *você* (forçada) ou *LLM* (escolhida pelo LLM local).
 - Iteração: "agora à noite", "mais close", "4 variações" — o LLM parte do último prompt. Os botões **Variar** e **Repetir seed** reaproveitam o prompt sem chamar o LLM. `/raw <prompt>` (ou a caixa *raw*) manda o texto direto.
 
 ## Requisitos
@@ -62,6 +67,16 @@ npm run dist:mac     # .dmg
 3. **Configurações → LLM local**: escolha Ollama ou "compatível com OpenAI", clique em *Testar / listar* e selecione o modelo. Com Ollama, `keep_alive = 0` descarrega o LLM logo depois de refinar o prompt, liberando a VRAM para o ComfyUI.
 4. **Configurações → Civitai / HF**: tokens opcionais.
 
+### Usando com um ComfyUI que você já tem
+
+O app trabalha em cima da sua instalação, sem copiar nada:
+
+- **Modelos e LoRAs**: lê `models/` e também as pastas do `extra_model_paths.yaml` (ex.: modelos compartilhados com o A1111/Forge). Com o ComfyUI aberto, pergunta ao próprio servidor quais pastas ele usa, o que cobre o ComfyUI Desktop e o `--models-directory`. O botão **Detectar automaticamente** (Configurações → ComfyUI) encontra a instalação pelo servidor em execução ou nas pastas mais comuns (pacote portátil, Documentos, Stability Matrix, Pinokio).
+- **Metadados sem internet**: para cada arquivo o app tenta descobrir o modelo base e as palavras-gatilho pelo cabeçalho do `.safetensors` (dados de treino do kohya/modelspec) e pelos arquivos auxiliares de outras ferramentas (`.civitai.info` do Civitai Helper, `.metadata.json` do LoRA Manager, `.json` do A1111/Forge), com o nome do arquivo como último recurso.
+- **Identificação exata**: peça ao chat de configuração *"identifique as LoRAs que eu já tenho"* — ele calcula o hash de cada arquivo e busca na Civitai (nome, modelo base, gatilhos, link).
+- **Workflows salvos**: peça *"importe meus workflows"*. O Claude lê os workflows salvos no ComfyUI (`user/default/workflows`), extrai checkpoint, LoRAs (inclusive pilhas do rgthree), sampler, steps, CFG, resolução e clip skip e cria workspaces equivalentes. Workflows com nós incomuns podem ser importados como estão via *Workflow → Export (API)*.
+- Os workspaces, o histórico dos chats e os metadados ficam na pasta de dados do app (`%APPDATA%/Comfy Atelier` no Windows) e continuam lá quando você atualiza o app.
+
 ### Exemplos de pedidos
 
 Chat de configuração:
@@ -69,7 +84,7 @@ Chat de configuração:
 - "Instale o Illustrious XL e uma LoRA de aquarela compatível; crie um workspace de anime."
 - "Instale https://civitai.com/models/12345 e adicione como LoRA opcional no workspace Pony."
 - "Configure o Flux dev em fp8 com tudo que precisa."
-- "Tenho vários .safetensors antigos em loras/, identifique cada um na Civitai."
+- "Identifique as LoRAs que eu já tenho e importe meus workflows salvos como workspaces."
 
 Chat de geração:
 - "retrato de uma guerreira élfica num penhasco ao pôr do sol"

@@ -37,7 +37,7 @@ export default function App() {
         </section>
         <div className="divider" />
         <section className="pane">
-          <GenerateChat settings={settings} workspaces={workspaces} onOpenSettings={() => setSettingsOpen(true)} />
+          <GenerateChat settings={settings} workspaces={workspaces} downloads={downloads} onOpenSettings={() => setSettingsOpen(true)} />
         </section>
       </main>
       {settingsOpen && <SettingsDialog settings={settings} onClose={() => setSettingsOpen(false)} />}

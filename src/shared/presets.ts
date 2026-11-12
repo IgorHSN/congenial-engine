@@ -148,3 +148,12 @@ export const BASE_MODEL_PROFILES: Record<BaseModel, BaseModelProfile> = {
 export function sizeFor(baseModel: BaseModel, aspect: Aspect): Size {
   return BASE_MODEL_PROFILES[baseModel].sizes[aspect];
 }
+
+/** Whether a LoRA trained for `lora` should work on a workspace of family `ws`. */
+export function loraCompatible(lora: BaseModel | undefined, ws: BaseModel): 'yes' | 'maybe' | 'no' {
+  if (!lora || lora === 'other' || ws === 'other') return 'maybe';
+  if (lora === ws) return 'yes';
+  const xl = new Set<BaseModel>(['sdxl', 'pony', 'illustrious', 'noobai']);
+  if (xl.has(lora) && xl.has(ws)) return 'maybe';
+  return 'no';
+}

@@ -62,6 +62,23 @@ export function SettingsDialog({ settings, onClose }: { settings: PublicSettings
     );
   };
 
+  const autoDetect = async () => {
+    setDetect('Procurando…');
+    const found = await api.settings.autoDetect();
+    if (found.url) patch({ comfy: { url: found.url } });
+    if (found.rootPath) {
+      await applyComfyPath(found.rootPath);
+      if (found.via === 'running-server') setDetect((d) => `Encontrado pelo ComfyUI em execução (${found.url}). ${d}`);
+      else if (found.candidates.length > 1) setDetect((d) => `${d}\nOutras instalações: ${found.candidates.slice(1).join(' · ')}`);
+    } else {
+      setDetect(
+        found.url
+          ? `ComfyUI em execução em ${found.url}, mas não consegui descobrir a pasta. Escolha-a manualmente.`
+          : 'Não encontrei o ComfyUI. Abra o ComfyUI e tente de novo, ou escolha a pasta manualmente.',
+      );
+    }
+  };
+
   const testLlm = async () => {
     await api.settings.update({ localLlm: draft.localLlm });
     setLlmTest(await api.llm.test());
@@ -92,6 +109,12 @@ export function SettingsDialog({ settings, onClose }: { settings: PublicSettings
         <div className="modal-body">
           {tab === 'comfy' && (
             <>
+              <div className="row detect-row">
+                <button className="btn" onClick={() => void autoDetect()}>
+                  Detectar automaticamente
+                </button>
+                <span className="hint">Com o ComfyUI aberto, a detecção também acha pastas extras (extra_model_paths.yaml) e o ComfyUI Desktop.</span>
+              </div>
               <Field label="URL do servidor" hint="Padrão do ComfyUI: http://127.0.0.1:8188 (ComfyUI Desktop usa :8000)">
                 <input value={draft.comfy.url} onChange={(e) => patch({ comfy: { url: e.target.value } })} />
               </Field>
@@ -106,7 +129,7 @@ export function SettingsDialog({ settings, onClose }: { settings: PublicSettings
                     Escolher…
                   </button>
                 </div>
-                {detect && <div className="small muted">{detect}</div>}
+                {detect && <div className="small muted pre-line">{detect}</div>}
               </Field>
               <Field label="Python do ComfyUI" hint="Vazio = detectar automaticamente (python_embeded, .venv, venv). Usado para pip e para iniciar.">
                 <input value={draft.comfy.pythonPath} onChange={(e) => patch({ comfy: { pythonPath: e.target.value } })} />

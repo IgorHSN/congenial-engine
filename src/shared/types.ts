@@ -97,6 +97,10 @@ export interface ModelSource {
 export interface ModelMeta {
   baseModel?: BaseModel;
   triggerWords?: string[];
+  /** Most frequent tags from the LoRA's training captions (hints, not guaranteed triggers). */
+  trainingTags?: string[];
+  /** Where auto-detected metadata came from (absent when set by the user/Claude). */
+  detectedFrom?: 'safetensors' | 'civitai-info' | 'lora-manager' | 'a1111' | 'filename';
   recommendedStrength?: number;
   description?: string;
   nsfw?: boolean;
@@ -109,6 +113,8 @@ export interface InstalledModel {
   folder: ModelFolder;
   /** Path relative to the folder, using forward slashes (what ComfyUI expects). */
   file: string;
+  /** Absolute path on disk (the folder may come from extra_model_paths.yaml). */
+  path: string;
   sizeBytes: number;
   meta: ModelMeta;
 }
@@ -120,6 +126,15 @@ export interface LoraRef {
   /** File relative to models/loras. */
   file: string;
   strength: number;
+}
+
+/** Per-workspace choice the user makes in the generation chat. */
+export type LoraMode = 'auto' | 'on' | 'off';
+
+/** A LoRA that was actually applied to a generation, and why. */
+export interface AppliedLora extends LoraRef {
+  /** workspace = fixed in the workspace; forced = turned on by the user; auto = picked by the local LLM */
+  source: 'workspace' | 'forced' | 'auto';
 }
 
 export interface SamplerDefaults {
@@ -288,6 +303,8 @@ export type GenEntry =
       /** The exact prompt text sent to ComfyUI (prefix + positive). */
       finalPositive: string;
       finalNegative: string;
+      /** LoRAs applied to this generation (absent in entries saved by older versions). */
+      loras?: AppliedLora[];
       job: GenerationJob;
     }
   | { kind: 'notice'; id: string; at: string; level: 'info' | 'warning' | 'error'; text: string };
@@ -301,6 +318,16 @@ export interface GenSendOptions {
   /** Skip the local LLM and send the text as the positive prompt. */
   raw?: boolean;
   workspaceId?: string;
+  /** User overrides per LoRA file: force on, force off, or let the LLM decide (optional LoRAs). */
+  loraModes?: Record<string, LoraMode>;
+}
+
+export interface ComfyDetection {
+  url?: string;
+  rootPath?: string;
+  /** How the root was found. */
+  via?: 'running-server' | 'folder';
+  candidates: string[];
 }
 
 export interface LlmTestResult {

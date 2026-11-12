@@ -13,7 +13,9 @@ const TOOL_LABELS: Record<string, string> = {
   download_model: 'Baixando modelo',
   delete_model: 'Apagando modelo',
   update_model_metadata: 'Atualizando metadados',
-  identify_local_model: 'Identificando modelo local',
+  identify_local_models: 'Identificando modelos locais',
+  list_comfy_workflows: 'Listando workflows do ComfyUI',
+  read_comfy_workflow: 'Lendo workflow',
   list_custom_nodes: 'Listando custom nodes',
   install_custom_node: 'Instalando custom node',
   run_command: 'Executando comando',
@@ -27,6 +29,7 @@ const TOOL_LABELS: Record<string, string> = {
 
 const SUGGESTIONS = [
   'Verifique minha instalação do ComfyUI e me diga o que falta.',
+  'Identifique as LoRAs que eu já tenho e importe meus workflows salvos como workspaces.',
   'Instale um bom checkpoint realista SDXL para a minha GPU e crie um workspace.',
   'Quero gerar no estilo anime: instale o Illustrious XL e uma LoRA de aquarela.',
   'Configure o Flux dev em fp8 com tudo que precisa.',
@@ -287,7 +290,7 @@ function ToolView({ call }: { call: ToolCallView }) {
 
 function toolHint(call: ToolCallView): string {
   const i = (call.input ?? {}) as Record<string, unknown>;
-  const v = i.query ?? i.name ?? i.ref ?? i.repo ?? i.git_url ?? i.command ?? i.file ?? i.hf_path ?? i.civitai_version_id ?? i.folder;
+  const v = i.query ?? i.name ?? i.ref ?? i.files ?? i.repo ?? i.git_url ?? i.command ?? i.file ?? i.hf_path ?? i.civitai_version_id ?? i.folder;
   return v == null ? '' : String(v).slice(0, 80);
 }
 
