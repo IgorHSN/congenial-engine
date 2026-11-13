@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import { IPC } from '@shared/ipc';
 import type {
+  ApprovalRequest,
   ClaudeEvent,
   ClaudeItem,
   ComfyDetection,
@@ -12,12 +13,16 @@ import type {
   GenSendOptions,
   InstalledModel,
   LlmTestResult,
+  McpActivity,
+  McpInfo,
   ModelFolder,
   PublicSettings,
+  SamplerOptions,
   SecretName,
   Settings,
   SizeRequest,
   Workspace,
+  WorkspaceInput,
 } from '@shared/types';
 
 function on<T>(channel: string, cb: (payload: T) => void): () => void {
@@ -45,6 +50,7 @@ const api = {
     start: (): Promise<void> => ipcRenderer.invoke(IPC.comfyStart),
     stop: (): Promise<void> => ipcRenderer.invoke(IPC.comfyStop),
     logs: (): Promise<string> => ipcRenderer.invoke(IPC.comfyLogs),
+    samplerOptions: (): Promise<SamplerOptions> => ipcRenderer.invoke(IPC.comfySamplerOptions),
     onStatus: (cb: (s: ComfyStatus) => void) => on(IPC.comfyStatusChanged, cb),
   },
   llm: {
@@ -72,6 +78,7 @@ const api = {
     list: (): Promise<Workspace[]> => ipcRenderer.invoke(IPC.workspacesList),
     setActive: (id: string): Promise<void> => ipcRenderer.invoke(IPC.workspacesSetActive, id),
     remove: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.workspacesDelete, id),
+    save: (input: WorkspaceInput, makeActive?: boolean): Promise<Workspace> => ipcRenderer.invoke(IPC.workspacesSave, input, makeActive),
     onChange: (cb: (items: Workspace[]) => void) => on(IPC.workspacesChanged, cb),
   },
   models: {
@@ -81,6 +88,14 @@ const api = {
     list: (): Promise<DownloadInfo[]> => ipcRenderer.invoke(IPC.downloadsList),
     cancel: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.downloadsCancel, id),
     onChange: (cb: (list: DownloadInfo[]) => void) => on(IPC.downloadsChanged, cb),
+  },
+  mcp: {
+    info: (): Promise<McpInfo> => ipcRenderer.invoke(IPC.mcpInfo),
+    installDesktop: (): Promise<{ path: string; backup: string | null; created: boolean }> => ipcRenderer.invoke(IPC.mcpInstallDesktop),
+    approve: (requestId: string, approved: boolean): Promise<void> => ipcRenderer.invoke(IPC.mcpApprove, requestId, approved),
+    onApproval: (cb: (req: ApprovalRequest) => void) => on(IPC.mcpApproval, cb),
+    onApprovalResolved: (cb: (requestId: string) => void) => on(IPC.mcpApprovalResolved, cb),
+    onActivity: (cb: (a: McpActivity) => void) => on(IPC.mcpActivity, cb),
   },
   shell: {
     openPath: (p: string): Promise<string> => ipcRenderer.invoke(IPC.shellOpenPath, p),

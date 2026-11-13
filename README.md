@@ -4,7 +4,7 @@ App desktop (Electron) que fica em cima do [ComfyUI](https://github.com/comfyano
 
 | Chat | Quem responde | Para quê |
 |---|---|---|
-| **Configuração** (esquerda) | Claude, via API da Anthropic | Instalar checkpoints, LoRAs, VAEs, encoders, custom nodes; preencher metadados (palavras-gatilho, modelo base); criar e testar **workspaces** |
+| **Configuração** (esquerda) | Claude, via API da Anthropic — ou o **Claude Desktop/Code com a sua assinatura** (sem API key) | Instalar checkpoints, LoRAs, VAEs, encoders, custom nodes; preencher metadados (palavras-gatilho, modelo base); criar e testar **workspaces** |
 | **Geração** (direita) | Um LLM **local** (Ollama, LM Studio, llama.cpp…) | Você descreve a imagem em linguagem natural, o LLM transforma num prompt otimizado para o modelo do workspace e o app manda para o ComfyUI |
 
 ![Comfy Atelier (dados de demonstração)](docs/screenshot.png)
@@ -77,6 +77,21 @@ npm run dist:mac     # .dmg
 3. **Configurações → LLM local**: escolha Ollama ou "compatível com OpenAI", clique em *Testar / listar* e selecione o modelo. Com Ollama, `keep_alive = 0` descarrega o LLM logo depois de refinar o prompt, liberando a VRAM para o ComfyUI.
 4. **Configurações → Civitai / HF**: tokens opcionais.
 
+### Sem API key: assinatura do Claude ou modo manual
+
+O chat de configuração embutido usa a API da Anthropic (pago por uso, separado da assinatura do claude.ai). Há duas alternativas, que podem ser usadas juntas:
+
+**Claude Desktop / Claude Code com a sua assinatura (Pro/Max).** O Comfy Atelier expõe as mesmas ferramentas do chat de configuração por um servidor MCP local (buscar e baixar modelos, identificar LoRAs, importar workflows, criar e testar workspaces…):
+
+1. Abra **Configurações → Claude Desktop/Code** e deixe a opção ligada (vem ligada).
+2. **Claude Desktop:** clique em **Adicionar ao Claude Desktop** (o app edita `claude_desktop_config.json` e guarda um backup). Feche o Claude Desktop por completo, inclusive na bandeja do sistema, e abra de novo.
+   **Claude Code:** clique em **Copiar comando** e rode uma vez no terminal (`claude mcp add comfy-atelier …`).
+3. Converse normalmente, por exemplo: *"Use o Comfy Atelier para instalar o Illustrious XL e montar um workspace de anime."*
+
+O Comfy Atelier precisa estar aberto enquanto isso, porque é ele que guarda os tokens, faz os downloads e mostra o progresso. Apagar arquivos, instalar custom nodes e rodar comandos abrem um cartão de aprovação **na janela do Comfy Atelier**. Downloads começam na hora e o Claude acompanha com `list_downloads`. O servidor só aceita conexões deste computador, com uma senha aleatória guardada na pasta de dados do app. Se você mudar o app de lugar (ex.: passar de `npm run dev` para o instalador), clique em "Adicionar ao Claude Desktop" de novo.
+
+**Workspaces na mão.** No chat de geração, o botão **+** cria um workspace e o **✎** edita o ativo. Você escolhe checkpoint (ou os arquivos do Flux), VAE, LoRAs fixas e opcionais com força, resolução, steps, CFG, sampler, scheduler, clip skip, prefixo, negativo e notas de estilo para o LLM local. O app sugere o modelo base pelo arquivo e avisa quando uma LoRA não combina com o modelo. Funciona sem nenhum Claude.
+
 ### Usando com um ComfyUI que você já tem
 
 O app trabalha em cima da sua instalação, sem copiar nada:
@@ -123,6 +138,7 @@ src/
   shared/            tipos, canais IPC, perfis por família de modelo (resoluções, prefixos, guias de prompt)
   main/              processo principal (Node)
     claude/          agente do chat de configuração: loop com streaming, ferramentas, system prompt, transcript
+    mcp/             servidor MCP para Claude Desktop/Code: endpoint local no app + ponte stdio (out/main/bridge.js)
     generation/      chat de geração: cliente do LLM local, refinador de prompt, verificação de segurança, sessão
     comfy/           cliente HTTP/WebSocket do ComfyUI, montagem de workflows, inventário de modelos, processo
     sources/         Civitai, Hugging Face e gerenciador de downloads
@@ -138,6 +154,8 @@ Detalhes da integração com o Claude:
 - Loop próprio com `client.beta.messages.stream`, *adaptive thinking* (resumo visível em "Raciocínio"), `effort` configurável, cache de prompt automático e *fallback* do lado do servidor (`fallbacks: "default"`) para recusas de classificador.
 - O histórico é salvo **literalmente** e só recebe acréscimos (o system prompt e a lista de ferramentas não mudam entre turnos), o que mantém o cache e os blocos de raciocínio válidos.
 - As ferramentas usam `eager_input_streaming`, e toda entrada é validada com Zod antes de executar.
+
+Para conferir telas sem rodar o app: `docs/screenshot.png` (os dois chats), `docs/screenshot-editor.png` (editor de workspace) e `docs/screenshot-mcp.png` (Claude Desktop/Code).
 
 ## Próximos passos sugeridos
 

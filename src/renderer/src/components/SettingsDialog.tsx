@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import type { DeepPartial, Effort, PublicSettings, SecretName, Settings } from '@shared/types';
 import { api } from '../api';
+import { McpSettings } from './McpPanel';
 
-type Tab = 'comfy' | 'claude' | 'llm' | 'sources' | 'generation';
+type Tab = 'comfy' | 'claude' | 'mcp' | 'llm' | 'sources' | 'generation';
 
 const CLAUDE_MODELS = [
   { id: 'claude-opus-5-5', label: 'Claude Opus 5.5 (recomendado)' },
@@ -94,7 +95,8 @@ export function SettingsDialog({ settings, onClose }: { settings: PublicSettings
           {(
             [
               ['comfy', 'ComfyUI'],
-              ['claude', 'Claude'],
+              ['claude', 'Claude (API)'],
+              ['mcp', 'Claude Desktop/Code'],
               ['llm', 'LLM local'],
               ['sources', 'Civitai / HF'],
               ['generation', 'Geração'],
@@ -162,6 +164,10 @@ export function SettingsDialog({ settings, onClose }: { settings: PublicSettings
 
           {tab === 'claude' && (
             <>
+              <p className="small muted">
+                O chat de configuração deste app usa a API da Anthropic (pago por uso, separado da assinatura do claude.ai). Para usar a sua
+                assinatura em vez disso, veja a aba <strong>Claude Desktop/Code</strong>.
+              </p>
               <SecretField
                 label="API key da Anthropic"
                 hint="Crie em console.anthropic.com. Fica criptografada no seu computador. Usada só no chat de configuração."
@@ -201,6 +207,16 @@ export function SettingsDialog({ settings, onClose }: { settings: PublicSettings
                 Aprovar downloads automaticamente (apagar arquivos, instalar nós e rodar comandos sempre pedem confirmação)
               </label>
             </>
+          )}
+
+          {tab === 'mcp' && (
+            <McpSettings
+              enabled={draft.mcp.enabled}
+              onToggle={(v) => {
+                patch({ mcp: { enabled: v } });
+                void api.settings.update({ mcp: { enabled: v } });
+              }}
+            />
           )}
 
           {tab === 'llm' && (

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ConfigChat } from './components/ConfigChat';
 import { GenerateChat } from './components/GenerateChat';
+import { McpApprovals } from './components/McpPanel';
 import { SettingsDialog } from './components/SettingsDialog';
 import { TopBar } from './components/TopBar';
 import { useComfyStatus, useDownloads, useSettings, useWorkspaces } from './hooks/useAppState';
@@ -41,6 +42,7 @@ export default function App() {
         </section>
       </main>
       {settingsOpen && <SettingsDialog settings={settings} onClose={() => setSettingsOpen(false)} />}
+      <McpApprovals />
     </div>
   );
 }

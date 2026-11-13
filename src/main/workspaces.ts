@@ -1,12 +1,9 @@
 import { join } from 'node:path';
 import { BASE_MODEL_PROFILES } from '@shared/presets';
-import type { BaseModel, Pipeline, Workspace } from '@shared/types';
+import type { Pipeline, Workspace, WorkspaceInput } from '@shared/types';
 import { JsonFile, newId } from './store';
 
-export type WorkspaceInput = Partial<Omit<Workspace, 'createdAt' | 'updatedAt'>> & {
-  name: string;
-  baseModel: BaseModel;
-};
+export type { WorkspaceInput };
 
 /** CRUD for workspaces (generation presets). */
 export class WorkspaceStore {

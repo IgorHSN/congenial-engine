@@ -15,6 +15,7 @@ import { BASE_MODEL_PROFILES } from '@shared/presets';
 import { api, imageUrl } from '../api';
 import { AppliedLoraChips, WorkspaceStrip } from './LoraChips';
 import { RerunSizeMenu, SizePicker } from './SizePicker';
+import { WorkspaceEditor } from './WorkspaceEditor';
 
 const MODES_KEY = 'atelier.loraModes';
 const SIZE_KEY = 'atelier.size';
@@ -72,6 +73,7 @@ export function GenerateChat({ settings, workspaces, downloads, onOpenSettings }
   const [raw, setRaw] = useState(false);
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [loraModels, setLoraModels] = useState<InstalledModel[]>([]);
+  const [editor, setEditor] = useState<{ workspace?: Workspace } | null>(null);
   const [allModes, setAllModes] = useState(loadModes);
   const [allSizes, setAllSizes] = useState(() => loadJson<Record<string, SizeRequest>>(SIZE_KEY, {}));
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -160,6 +162,14 @@ export function GenerateChat({ settings, workspaces, downloads, onOpenSettings }
             </option>
           ))}
         </select>
+        {active && (
+          <button className="btn ghost small icon" onClick={() => setEditor({ workspace: active })} title="Editar este workspace">
+            ✎
+          </button>
+        )}
+        <button className="btn ghost small icon" onClick={() => setEditor({})} title="Novo workspace">
+          +
+        </button>
         <button className="btn ghost small" onClick={() => void api.shell.openPath(settings.generation.outputDir)}>
           Pasta
         </button>
@@ -185,7 +195,11 @@ export function GenerateChat({ settings, workspaces, downloads, onOpenSettings }
         )}
         {!workspaces.length && (
           <div className="callout subtle">
-            Nenhum workspace ainda. Peça ao chat de configuração, por exemplo: <em>"crie um workspace com o checkpoint que eu já tenho"</em>.
+            Nenhum workspace ainda.{' '}
+            <button className="btn small primary" onClick={() => setEditor({})}>
+              Criar workspace
+            </button>{' '}
+            com os modelos que você já tem, ou peça ao Claude: <em>"crie um workspace com o checkpoint que eu já tenho"</em>.
           </div>
         )}
         {entries.length === 0 && workspaces.length > 0 && (
@@ -247,6 +261,8 @@ export function GenerateChat({ settings, workspaces, downloads, onOpenSettings }
           )}
         </div>
       </form>
+
+      {editor && <WorkspaceEditor workspace={editor.workspace} onClose={() => setEditor(null)} />}
 
       {lightbox && (
         <div className="lightbox" onClick={() => setLightbox(null)}>

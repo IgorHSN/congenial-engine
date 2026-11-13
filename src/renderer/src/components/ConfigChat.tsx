@@ -158,7 +158,17 @@ export function ConfigChat({ settings, onOpenSettings }: Props) {
       <div className="chat-body" ref={scrollRef}>
         {noKey && (
           <div className="callout">
-            Para usar o chat de configuração, adicione sua API key da Anthropic.{' '}
+            <p style={{ margin: '0 0 8px' }}>
+              Este chat usa a API da Anthropic (pago por uso). Sem API key, você pode:
+            </p>
+            <ul style={{ margin: '0 0 8px', paddingLeft: 18 }}>
+              <li>
+                usar o <strong>Claude Desktop / Claude Code</strong> com a sua assinatura — Configurações → Claude Desktop/Code;
+              </li>
+              <li>
+                criar workspaces <strong>manualmente</strong> no botão <strong>+</strong> do chat de geração.
+              </li>
+            </ul>
             <button className="btn small" onClick={onOpenSettings}>
               Abrir configurações
             </button>

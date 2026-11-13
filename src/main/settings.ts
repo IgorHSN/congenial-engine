@@ -37,6 +37,9 @@ export function defaultSettings(picturesDir: string): Settings {
       activeWorkspaceId: null,
       showRefinedPrompt: true,
     },
+    mcp: {
+      enabled: true,
+    },
   };
 }
 

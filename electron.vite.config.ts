@@ -6,6 +6,15 @@ export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
     resolve: { alias: { '@shared': resolve('src/shared') } },
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve('src/main/index.ts'),
+          // MCP bridge launched by Claude Desktop / Claude Code (out/main/bridge.js)
+          bridge: resolve('src/main/mcp/bridge-entry.ts'),
+        },
+      },
+    },
   },
   preload: {
     plugins: [externalizeDepsPlugin()],

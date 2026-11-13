@@ -14,6 +14,14 @@ export const IPC = {
   comfyStop: 'comfy:stop',
   comfyLogs: 'comfy:logs',
   comfyStatusChanged: 'comfy:status-changed',
+  comfySamplerOptions: 'comfy:sampler-options',
+
+  mcpInfo: 'mcp:info',
+  mcpInstallDesktop: 'mcp:install-desktop',
+  mcpApproval: 'mcp:approval',
+  mcpApprovalResolved: 'mcp:approval-resolved',
+  mcpApprove: 'mcp:approve',
+  mcpActivity: 'mcp:activity',
 
   llmTest: 'llm:test',
 
@@ -34,6 +42,7 @@ export const IPC = {
   workspacesList: 'workspaces:list',
   workspacesSetActive: 'workspaces:set-active',
   workspacesDelete: 'workspaces:delete',
+  workspacesSave: 'workspaces:save',
   workspacesChanged: 'workspaces:changed',
 
   modelsList: 'models:list',

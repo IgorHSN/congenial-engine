@@ -71,6 +71,10 @@ export interface Settings {
     /** Show the refined prompt under each result. */
     showRefinedPrompt: boolean;
   };
+  mcp: {
+    /** Expose the app's tools to Claude Desktop / Claude Code through a local MCP bridge. */
+    enabled: boolean;
+  };
 }
 
 /** Settings as exposed to the renderer: secrets are reduced to flags. */
@@ -187,6 +191,12 @@ export interface Workspace {
   createdAt: string;
   updatedAt: string;
 }
+
+/** Create (no id) or update (id) a workspace; omitted fields keep their value or get family defaults. */
+export type WorkspaceInput = Partial<Omit<Workspace, 'createdAt' | 'updatedAt'>> & {
+  name: string;
+  baseModel: BaseModel;
+};
 
 // ---------------------------------------------------------------------------
 // Downloads
@@ -348,4 +358,34 @@ export interface LlmTestResult {
   ok: boolean;
   models: string[];
   error?: string;
+}
+
+// ---------------------------------------------------------------------------
+// MCP (Claude Desktop / Claude Code using the user's Claude subscription)
+
+export interface McpInfo {
+  enabled: boolean;
+  running: boolean;
+  port: number | null;
+  /** JSON to add under "mcpServers" in Claude Desktop's config. */
+  desktopSnippet: string;
+  desktopConfigPath: string;
+  /** Command that registers the server in Claude Code. */
+  claudeCodeCommand: string;
+  error?: string;
+}
+
+export interface McpActivity {
+  id: string;
+  tool: string;
+  phase: 'start' | 'end';
+  ok?: boolean;
+  summary?: string;
+  at: string;
+}
+
+export interface SamplerOptions {
+  samplers: string[];
+  schedulers: string[];
+  fromServer: boolean;
 }

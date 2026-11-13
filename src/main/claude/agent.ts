@@ -11,6 +11,11 @@ type ToolResult = Anthropic.Beta.BetaToolResultBlockParam;
 
 const MAX_ITERATIONS = 40;
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
+/**
+ * App updates can change the system prompt or tool list mid-conversation; with
+ * this, thinking blocks that no longer match are dropped instead of failing.
+ */
+const BINDING_BETA = 'thinking-binding-controls-2026-08-01';
 
 interface Deps {
   dataDir: string;
@@ -134,11 +139,11 @@ export class ClaudeAgent {
           {
             model: s.model,
             max_tokens: 64000,
-            betas: [FALLBACK_BETA],
+            betas: [FALLBACK_BETA, BINDING_BETA],
             fallbacks: 'default',
             system: SETUP_SYSTEM_PROMPT,
             tools: TOOL_PARAMS,
-            thinking: { type: 'adaptive', display: 'summarized' },
+            thinking: { type: 'adaptive', display: 'summarized', block_binding: { prefix_mismatch_behavior: 'drop_block' } },
             output_config: { effort: s.effort },
             cache_control: { type: 'ephemeral' },
             messages: this.messages,

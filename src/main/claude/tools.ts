@@ -40,6 +40,11 @@ export interface ToolContext {
   /** Downscale an image for Claude to look at (JPEG base64). */
   previewImage: (path: string) => Promise<{ data: string; mediaType: 'image/jpeg' | 'image/png' } | null>;
   signal: AbortSignal;
+  /**
+   * Long jobs (downloads) return right away and keep running in the app.
+   * Used for MCP clients, which may time out on long tool calls.
+   */
+  background?: boolean;
 }
 
 export type ToolOutput = string | Anthropic.Beta.BetaToolResultBlockParam['content'];
@@ -349,13 +354,37 @@ export const TOOLS = [
       }
 
       const { id, done } = ctx.downloader.enqueue({ label, url, folder, file: rel, dest, headers, expectedSha256: sha256 });
+      const recordMeta = () => ctx.inventory.setMeta(folder!, rel, { ...meta, sha256, addedAt: new Date().toISOString() });
+      if (ctx.background) {
+        void done.then((info) => (info.state === 'done' ? recordMeta() : undefined)).catch(() => undefined);
+        return json({ status: 'downloading', downloadId: id, folder, file: rel, next: 'Check progress with list_downloads before using the file.' });
+      }
       const info = await done;
       if (info.state !== 'done') {
         throw new ToolError(`Download ${id} ${info.state}: ${info.error ?? ''}`.trim());
       }
-      await ctx.inventory.setMeta(folder, rel, { ...meta, sha256, addedAt: new Date().toISOString() });
+      await recordMeta();
       return json({ status: 'installed', folder, file: rel, sizeMB: mb(info.receivedBytes), verified: !!sha256, metadata: meta });
     },
+  }),
+
+  tool({
+    name: 'list_downloads',
+    description: 'List recent and running model downloads with progress, speed and errors.',
+    schema: z.object({}),
+    run: async (_i, ctx) =>
+      json(
+        ctx.downloader.list().map((d) => ({
+          id: d.id,
+          label: d.label,
+          folder: d.folder,
+          file: d.file,
+          state: d.state,
+          progress: d.totalBytes ? `${Math.round((100 * d.receivedBytes) / d.totalBytes)}%` : `${mb(d.receivedBytes)} MB`,
+          speedMBs: d.bytesPerSecond ? Math.round((d.bytesPerSecond / 1024 / 1024) * 10) / 10 : undefined,
+          error: d.error,
+        })),
+      ),
   }),
 
   tool({

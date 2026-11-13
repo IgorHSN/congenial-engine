@@ -2,7 +2,19 @@ import { join, relative, resolve, sep, isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, safeStorage, shell } from 'electron';
 import { IMAGE_PROTOCOL, IPC } from '@shared/ipc';
-import type { ComfyStatus, DeepPartial, GenSendOptions, LlmTestResult, ModelFolder, SecretName, Settings, SizeRequest } from '@shared/types';
+import type {
+  ApprovalRequest,
+  ComfyStatus,
+  DeepPartial,
+  GenSendOptions,
+  LlmTestResult,
+  McpInfo,
+  ModelFolder,
+  SamplerOptions,
+  SecretName,
+  Settings,
+  SizeRequest,
+} from '@shared/types';
 import { ClaudeAgent } from './claude/agent';
 import { ComfyClient } from './comfy/client';
 import { ModelInventory } from './comfy/inventory';
@@ -15,7 +27,13 @@ import { defaultSettings, SettingsStore } from './settings';
 import { CivitaiClient } from './sources/civitai';
 import { Downloader } from './sources/downloader';
 import { HuggingFaceClient } from './sources/huggingface';
-import { WorkspaceStore } from './workspaces';
+import { McpHost } from './mcp/host';
+import { claudeCodeCommand, desktopConfigPath, desktopSnippet, installInDesktopConfig, type BridgeLaunch } from './mcp/clientConfig';
+import { newId } from './store';
+import { WorkspaceStore, type WorkspaceInput } from './workspaces';
+
+const DEFAULT_SAMPLERS = ['euler', 'euler_ancestral', 'heun', 'dpm_2', 'dpm_2_ancestral', 'lms', 'dpmpp_2s_ancestral', 'dpmpp_sde', 'dpmpp_2m', 'dpmpp_2m_sde', 'dpmpp_3m_sde', 'ddim', 'uni_pc', 'lcm'];
+const DEFAULT_SCHEDULERS = ['normal', 'karras', 'exponential', 'sgm_uniform', 'simple', 'ddim_uniform', 'beta'];
 
 protocol.registerSchemesAsPrivileged([
   { scheme: IMAGE_PROTOCOL, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
@@ -65,31 +83,80 @@ async function bootstrap(): Promise<void> {
     await settings.update({ generation: { activeWorkspaceId: id } });
   };
 
+  const toolContext = {
+    settings: cfg,
+    comfy,
+    process: proc,
+    inventory,
+    civitai,
+    hf,
+    downloader,
+    workspaces,
+    setActiveWorkspace,
+    previewImage: async (path: string) => {
+      const img = nativeImage.createFromPath(path);
+      if (img.isEmpty()) return null;
+      const { width } = img.getSize();
+      const small = width > 768 ? img.resize({ width: 768, quality: 'good' }) : img;
+      return { data: small.toJPEG(82).toString('base64'), mediaType: 'image/jpeg' as const };
+    },
+  };
+
   const agent = new ClaudeAgent({
     dataDir,
     settings: cfg,
     apiKey: () => settings.getSecret('anthropicApiKey'),
     emit: (e) => send(IPC.claudeEvent, e),
-    toolContext: {
-      settings: cfg,
-      comfy,
-      process: proc,
-      inventory,
-      civitai,
-      hf,
-      downloader,
-      workspaces,
-      setActiveWorkspace,
-      previewImage: async (path) => {
-        const img = nativeImage.createFromPath(path);
-        if (img.isEmpty()) return null;
-        const { width } = img.getSize();
-        const small = width > 768 ? img.resize({ width: 768, quality: 'good' }) : img;
-        return { data: small.toJPEG(82).toString('base64'), mediaType: 'image/jpeg' };
-      },
-    },
+    toolContext,
   });
   await agent.load();
+
+  // --- MCP: Claude Desktop / Claude Code use these tools with the user's subscription.
+  const mcpApprovals = new Map<string, (ok: boolean) => void>();
+  const approveFromMcp = (req: Omit<ApprovalRequest, 'requestId' | 'toolUseId'>) =>
+    new Promise<boolean>((resolvePromise) => {
+      const requestId = newId('mcpap-');
+      const timer = setTimeout(() => finish(false), 10 * 60 * 1000);
+      const finish = (ok: boolean) => {
+        clearTimeout(timer);
+        if (!mcpApprovals.delete(requestId)) return;
+        send(IPC.mcpApprovalResolved, requestId);
+        resolvePromise(ok);
+      };
+      mcpApprovals.set(requestId, finish);
+      send(IPC.mcpApproval, { ...req, requestId, toolUseId: requestId });
+      // The request comes from another app: bring this window forward.
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+        mainWindow.flashFrame(true);
+      }
+    });
+  const mcpHost = new McpHost({
+    dataDir,
+    toolContext,
+    approve: approveFromMcp,
+    onActivity: (a) => send(IPC.mcpActivity, a),
+  });
+  let mcpError: string | undefined;
+  const syncMcp = async () => {
+    try {
+      if (cfg().mcp.enabled && !mcpHost.running) await mcpHost.start();
+      if (!cfg().mcp.enabled && mcpHost.running) await mcpHost.stop();
+      mcpError = undefined;
+    } catch (err) {
+      mcpError = (err as Error).message;
+    }
+  };
+  await syncMcp();
+  settings.onChange(() => void syncMcp());
+  const bridgeLaunch = (): BridgeLaunch => ({
+    command: process.execPath,
+    // bridge.js is built next to this file (out/main), also inside app.asar.
+    bridgePath: join(__dirname, 'bridge.js'),
+    dataDir,
+  });
 
   const gen = new GenerationSession({
     dataDir,
@@ -208,6 +275,47 @@ async function bootstrap(): Promise<void> {
     }
   });
 
+  ipcMain.handle(IPC.workspacesSave, async (_e, input: WorkspaceInput, makeActive?: boolean) => {
+    const ws = await workspaces.save(input);
+    if (makeActive || workspaces.list().length === 1) await setActiveWorkspace(ws.id);
+    return ws;
+  });
+
+  ipcMain.handle(IPC.comfySamplerOptions, async (): Promise<SamplerOptions> => {
+    try {
+      const info = (await comfy.objectInfo('KSampler')).KSampler;
+      const samplers = info?.input?.required?.sampler_name?.[0];
+      const schedulers = info?.input?.required?.scheduler?.[0];
+      if (Array.isArray(samplers) && Array.isArray(schedulers)) {
+        return { samplers: samplers as string[], schedulers: schedulers as string[], fromServer: true };
+      }
+    } catch {
+      /* ComfyUI offline */
+    }
+    return { samplers: DEFAULT_SAMPLERS, schedulers: DEFAULT_SCHEDULERS, fromServer: false };
+  });
+
+  ipcMain.handle(IPC.mcpInfo, (): McpInfo => {
+    const launch = bridgeLaunch();
+    return {
+      enabled: cfg().mcp.enabled,
+      running: mcpHost.running,
+      port: mcpHost.port,
+      desktopSnippet: desktopSnippet(launch),
+      desktopConfigPath: desktopConfigPath(),
+      claudeCodeCommand: claudeCodeCommand(launch),
+      error: mcpError,
+    };
+  });
+  ipcMain.handle(IPC.mcpInstallDesktop, async () => {
+    const path = desktopConfigPath();
+    const res = await installInDesktopConfig(path, bridgeLaunch());
+    return { path, ...res };
+  });
+  ipcMain.handle(IPC.mcpApprove, (_e, requestId: string, approved: boolean) => {
+    mcpApprovals.get(requestId)?.(!!approved);
+  });
+
   ipcMain.handle(IPC.downloadsList, () => downloader.list());
   ipcMain.handle(IPC.downloadsCancel, (_e, id: string) => downloader.cancel(id));
 
@@ -237,6 +345,7 @@ async function bootstrap(): Promise<void> {
 
   app.on('before-quit', () => {
     void proc.stop();
+    void mcpHost.stop();
   });
 }
 

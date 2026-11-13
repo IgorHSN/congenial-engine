@@ -258,9 +258,60 @@ await win.locator('button', { hasText: 'Testar / listar' }).click();
 await win.waitForSelector('text=Conectado · 2 modelo(s)');
 await win.screenshot({ path: join(OUT, 'screenshot-settings.png') });
 
+// Claude Desktop / Code tab
+await win.locator('.tab', { hasText: 'Claude Desktop/Code' }).click();
+await win.waitForSelector('text=Adicionar ao Claude Desktop');
+const shownCommand = await win.locator('.code-block').textContent();
+await win.screenshot({ path: join(OUT, 'screenshot-mcp.png') });
+await win.locator('button', { hasText: 'Cancelar' }).click();
+
+// Manual workspace editor
+await gen.locator('button[title="Novo workspace"]').click();
+const editor = win.locator('.modal.editor');
+await editor.waitFor();
+const field = (label) => editor.locator('.field').filter({ has: win.locator('label', { hasText: new RegExp(`^${label}$`) }) });
+await field('Checkpoint').locator('select').selectOption('ponyDiffusionV6XL.safetensors');
+await field('Nome').locator('input').fill('Manual · Pony');
+await editor.locator('button', { hasText: 'Adicionar LoRA' }).click();
+await editor.locator('.lora-row select').first().selectOption('watercolor_style_pony.safetensors');
+await win.screenshot({ path: join(OUT, 'screenshot-editor.png') });
+await editor.locator('button', { hasText: 'Salvar' }).click();
+await editor.waitFor({ state: 'detached' });
+const workspaceOptions = await gen.locator('.chat-header select option').allTextContents();
+
+// MCP bridge exactly as Claude Desktop runs it: the app's Electron binary in node mode.
+const { spawn } = await import('node:child_process');
+const bridge = spawn(require('electron'), [join(APP, 'out/main/bridge.js'), '--data-dir', userData], {
+  env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+  stdio: ['pipe', 'pipe', 'inherit'],
+});
+const replies = [];
+let buffer = '';
+bridge.stdout.on('data', (d) => {
+  buffer += d.toString();
+  let i;
+  while ((i = buffer.indexOf('\n')) !== -1) {
+    replies.push(JSON.parse(buffer.slice(0, i)));
+    buffer = buffer.slice(i + 1);
+  }
+});
+const rpc = (id, method, params) => bridge.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+rpc(1, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'smoke', version: '1' } });
+rpc(2, 'tools/list', {});
+rpc(3, 'tools/call', { name: 'list_workspaces', arguments: {} });
+const deadline = Date.now() + 15000;
+while (replies.length < 3 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+bridge.kill();
+const mcpWorkspaces = JSON.parse(replies.find((r) => r.id === 3)?.result?.content?.[0]?.text ?? '{}').workspaces?.map((w) => w.name);
+
 const lorasOf = (p) => Object.values(p).filter((x) => x.class_type === 'LoraLoader').map((x) => x.inputs.lora_name);
 const appliedChips = await win.evaluate(() => [...document.querySelectorAll('.result:last-of-type .lora-chip.applied')].map((c) => c.textContent));
 const report = {
+  workspaceOptions,
+  shownCommand,
+  mcpServer: replies.find((r) => r.id === 1)?.result?.serverInfo?.name,
+  mcpTools: replies.find((r) => r.id === 2)?.result?.tools?.length,
+  mcpWorkspaces,
   firstLoras: lorasOf(received[0]),
   secondLoras: lorasOf(received.at(-1)),
   appliedChips,
@@ -279,6 +330,11 @@ const ok =
   llmRequests.length === 2 &&
   received.length === 2 &&
   report.secondLoras.includes('film_grain_pony.safetensors') &&
+  workspaceOptions.length === 2 &&
+  shownCommand.includes(join(APP, 'out', 'main', 'bridge.js')) &&
+  report.mcpServer === 'comfy-atelier' &&
+  report.mcpTools > 15 &&
+  mcpWorkspaces?.includes('Manual · Pony') &&
   report.latent.width === 1344 &&
   report.latent.height === 768 &&
   !report.firstLoras.includes('film_grain_pony.safetensors');

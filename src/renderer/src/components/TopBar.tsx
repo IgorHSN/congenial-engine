@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { ComfyStatus, DownloadInfo, PublicSettings, Workspace } from '@shared/types';
 import { api, formatBytes } from '../api';
+import { McpActivityChip } from './McpPanel';
 
 interface Props {
   settings: PublicSettings;
@@ -68,6 +69,7 @@ export function TopBar({ settings, status, workspaces, downloads, onOpenSettings
       <div className="spacer" />
 
       <div className="topbar-actions">
+        <McpActivityChip />
         <span className="muted small">{workspaces.length} workspace{workspaces.length === 1 ? '' : 's'}</span>
         <div className="popover-anchor">
           <button className={`btn ghost ${active.length ? 'pulse' : ''}`} onClick={() => setShowDownloads((v) => !v)}>
