@@ -16,7 +16,10 @@
     "dist:win": "electron-vite build && electron-builder --win",
     "dist:linux": "electron-vite build && electron-builder --linux",
     "dist:mac": "electron-vite build && electron-builder --mac",
-    "smoke": "node scripts/smoke-e2e.mjs"
+    "smoke": "node scripts/smoke-e2e.mjs",
+    "postinstall": "install-electron",
+    "predev": "install-electron",
+    "presmoke": "install-electron"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",

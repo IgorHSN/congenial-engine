@@ -57,6 +57,10 @@ npm install
 npm run dev          # modo desenvolvimento (hot reload)
 ```
 
+No Windows, se o PowerShell disser que *"a execução de scripts foi desabilitada"*, use `npm.cmd install` e `npm.cmd run dev`, ou libere scripts locais para o seu usuário uma vez com `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned`.
+
+O `npm install` baixa o Electron (≈100 MB). Se o download falhar (rede, antivírus) e o app reclamar de *"Electron uninstall"*, rode `npx install-electron` (no Windows, `npx.cmd install-electron`). O `npm run dev` também tenta baixar de novo sozinho.
+
 Gerar instalador:
 
 ```bash
