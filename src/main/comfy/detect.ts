@@ -44,8 +44,11 @@ function looksLikeComfy(path: string): string | null {
  * model folders, so this also finds ComfyUI Desktop and custom locations),
  * then look in the usual install folders.
  */
-export async function detectComfy(currentUrl: string): Promise<ComfyDetection> {
-  const urls = [...new Set([currentUrl, 'http://127.0.0.1:8188', 'http://127.0.0.1:8000'].filter(Boolean))];
+export async function detectComfy(
+  currentUrl: string,
+  defaultUrls: string[] = ['http://127.0.0.1:8188', 'http://127.0.0.1:8000'],
+): Promise<ComfyDetection> {
+  const urls = [...new Set([currentUrl, ...defaultUrls].filter(Boolean))];
   let reachableUrl: string | undefined;
   for (const url of urls) {
     const client = new ComfyClient(() => url);

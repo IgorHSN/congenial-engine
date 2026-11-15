@@ -229,7 +229,8 @@ describe('client config', () => {
     expect(claudeCodeCommand(launch)).toBe(
       'claude mcp add comfy-atelier --scope user --env ELECTRON_RUN_AS_NODE=1 -- "C:\\Program Files\\Comfy Atelier\\Comfy Atelier.exe" "C:\\app\\out\\main\\bridge.js" --data-dir "C:\\Users\\me\\AppData\\Roaming\\Comfy Atelier"',
     );
-    expect(desktopConfigPath('win32', { APPDATA: 'C:\\AppData' }, 'C:\\Users\\me')).toContain('Claude');
+    expect(desktopConfigPath('win32', { APPDATA: 'C:\\AppData' }, 'C:\\Users\\me')).toBe('C:\\AppData\\Claude\\claude_desktop_config.json');
+    expect(desktopConfigPath('win32', {}, 'C:\\Users\\me')).toBe('C:\\Users\\me\\AppData\\Roaming\\Claude\\claude_desktop_config.json');
     expect(desktopConfigPath('darwin', {}, '/Users/me')).toBe('/Users/me/Library/Application Support/Claude/claude_desktop_config.json');
     expect(desktopConfigPath('linux', {}, '/home/me')).toBe('/home/me/.config/Claude/claude_desktop_config.json');
   });

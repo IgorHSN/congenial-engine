@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join, normalize } from 'node:path';
+import { join, normalize, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { detectComfy } from '../src/main/comfy/detect';
 import { ModelInventory } from '../src/main/comfy/inventory';
@@ -49,20 +49,22 @@ relative:
       yamlDir,
       { MODELS_HOME: normalize('/data/models') },
     );
-    expect(parsed.checkpoints).toEqual([normalize('/opt/stable-diffusion-webui/models/Stable-diffusion')]);
-    // is_default entries go first
+    // Paths resolved against the YAML folder are made absolute (on Windows that adds the drive, like os.path.abspath).
+    expect(parsed.checkpoints).toEqual([resolve('/opt/stable-diffusion-webui/models/Stable-diffusion')]);
+    // is_default entries go first; an absolute base_path is kept as is
     expect(parsed.loras).toEqual([
       normalize('/data/models/loras'),
-      normalize('/opt/stable-diffusion-webui/models/Lora'),
-      normalize('/opt/stable-diffusion-webui/models/LyCORIS'),
+      resolve('/opt/stable-diffusion-webui/models/Lora'),
+      resolve('/opt/stable-diffusion-webui/models/LyCORIS'),
     ]);
     // legacy "clip" key maps to text_encoders
-    expect(parsed.text_encoders).toEqual([normalize('/opt/stable-diffusion-webui/models/text_encoder')]);
-    expect(parsed.vae).toEqual([normalize('/opt/ComfyUI/shared/vae')]);
+    expect(parsed.text_encoders).toEqual([resolve('/opt/stable-diffusion-webui/models/text_encoder')]);
+    expect(parsed.vae).toEqual([resolve('/opt/ComfyUI/shared/vae')]);
   });
 
   it('expands ~ and env vars', () => {
-    expect(expandPath('~/models')).toBe(join(homedir(), 'models'));
+    // Like os.path.expanduser: only the ~ is replaced, the rest is kept as written.
+    expect(expandPath('~/models')).toBe(`${homedir()}/models`);
     expect(expandPath('%X%/a', { X: 'C:' })).toBe('C:/a');
     expect(expandPath('${Y}/b', { Y: '/y' })).toBe('/y/b');
   });
@@ -266,14 +268,14 @@ describe('detectComfy', () => {
     writeFileSync(join(root, 'main.py'), '');
     const server = await startFakeComfy({ folderPaths: { checkpoints: [join(root, 'models', 'checkpoints')], loras: [] } });
     cleanups.push(server.close);
-    const found = await detectComfy(server.url);
+    const found = await detectComfy(server.url, []); // only the fake server, not a real ComfyUI on this machine
     expect(found).toMatchObject({ url: server.url, rootPath: root, via: 'running-server' });
   });
 
   it('reports a reachable server without folder info', async () => {
     const server = await startFakeComfy();
     cleanups.push(server.close);
-    const found = await detectComfy(server.url);
+    const found = await detectComfy(server.url, []); // only the fake server, not a real ComfyUI on this machine
     expect(found.url).toBe(server.url);
   });
 });

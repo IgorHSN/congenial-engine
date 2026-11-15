@@ -1,6 +1,6 @@
 import { existsSync, promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, posix, win32 } from 'node:path';
 
 export const SERVER_NAME = 'comfy-atelier';
 
@@ -33,9 +33,12 @@ export function claudeCodeCommand(l: BridgeLaunch): string {
 }
 
 export function desktopConfigPath(platform = process.platform, env = process.env, home = homedir()): string {
-  if (platform === 'win32') return join(env.APPDATA ?? join(home, 'AppData', 'Roaming'), 'Claude', 'claude_desktop_config.json');
-  if (platform === 'darwin') return join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
-  return join(env.XDG_CONFIG_HOME ?? join(home, '.config'), 'Claude', 'claude_desktop_config.json');
+  // Join with the target platform's separator, whatever platform this runs on.
+  if (platform === 'win32') {
+    return win32.join(env.APPDATA ?? win32.join(home, 'AppData', 'Roaming'), 'Claude', 'claude_desktop_config.json');
+  }
+  if (platform === 'darwin') return posix.join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
+  return posix.join(env.XDG_CONFIG_HOME ?? posix.join(home, '.config'), 'Claude', 'claude_desktop_config.json');
 }
 
 /**
