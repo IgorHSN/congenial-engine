@@ -32,6 +32,8 @@ interface SystemStats {
 
 /** Minimal client for the ComfyUI HTTP + WebSocket API. */
 export class ComfyClient {
+  private nodeInfo = new Map<string, { at: number; info: NodeInfo | null }>();
+
   constructor(private readonly getBaseUrl: () => string) {}
 
   get baseUrl(): string {
@@ -117,7 +119,46 @@ export class ComfyClient {
     return false;
   }
 
+  /** The choices a node input offers (a COMBO list), from /object_info; cached for a minute. */
+  private async comboOptions(nodeClass: string, input: string): Promise<string[] | null> {
+    let entry = this.nodeInfo.get(nodeClass);
+    if (!entry || Date.now() - entry.at > 60_000) {
+      let info: NodeInfo | null = null;
+      try {
+        info = (await this.objectInfo(nodeClass))[nodeClass] ?? null;
+      } catch {
+        info = null;
+      }
+      entry = { at: Date.now(), info };
+      this.nodeInfo.set(nodeClass, entry);
+    }
+    const spec = entry.info?.input?.required?.[input] ?? entry.info?.input?.optional?.[input];
+    if (!Array.isArray(spec)) return null;
+    // Old format: [["a", "b"], {...}]; new format: ["COMBO", { options: ["a", "b"] }].
+    const list = Array.isArray(spec[0]) ? spec[0] : spec[0] === 'COMBO' ? (spec[1] as { options?: unknown } | undefined)?.options : null;
+    return Array.isArray(list) ? list.filter((o): o is string => typeof o === 'string') : null;
+  }
+
+  /**
+   * The app stores model files with "/", but ComfyUI lists files in subfolders
+   * with the server's own separator ("\" on Windows) and rejects any other
+   * spelling. Rewrite each path-like value to the exact entry the server offers.
+   */
+  async matchFileNames(graph: ComfyGraph): Promise<void> {
+    const norm = (s: string) => s.replace(/\\/g, '/');
+    for (const node of Object.values(graph)) {
+      for (const [key, value] of Object.entries(node.inputs ?? {})) {
+        if (typeof value !== 'string' || !/[\\/]/.test(value)) continue;
+        const options = await this.comboOptions(node.class_type, key);
+        if (!options || options.includes(value)) continue;
+        const match = options.find((o) => norm(o) === norm(value));
+        if (match) node.inputs[key] = match;
+      }
+    }
+  }
+
   async queuePrompt(graph: ComfyGraph, clientId: string): Promise<string> {
+    await this.matchFileNames(graph);
     const res = await this.request<{ prompt_id: string; node_errors?: Record<string, unknown> }>('/prompt', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
