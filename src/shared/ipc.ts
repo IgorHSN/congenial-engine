@@ -43,6 +43,7 @@ export const IPC = {
   workspacesSetActive: 'workspaces:set-active',
   workspacesDelete: 'workspaces:delete',
   workspacesSave: 'workspaces:save',
+  workspacesImportWorkflow: 'workspaces:import-workflow',
   workspacesChanged: 'workspaces:changed',
 
   modelsList: 'models:list',

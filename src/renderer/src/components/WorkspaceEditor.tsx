@@ -8,6 +8,7 @@ import {
   type Pipeline,
   type SamplerDefaults,
   type SamplerOptions,
+  type WorkflowImport,
   type Workspace,
   type WorkspaceInput,
 } from '@shared/types';
@@ -95,6 +96,7 @@ export function WorkspaceEditor({ workspace, onClose }: Props) {
   const [opts, setOpts] = useState<SamplerOptions | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [imported, setImported] = useState<WorkflowImport | null>(null);
   const isNew = !workspace;
 
   useEffect(() => {
@@ -129,6 +131,41 @@ export function WorkspaceEditor({ workspace, onClose }: Props) {
     const meta = byFolder.get('checkpoints')?.find((m) => m.file === file)?.meta;
     setForm((f) => ({ ...f, checkpoint: file, name: f.name || shortName(file) }));
     if (isNew && meta?.baseModel && meta.baseModel !== form.baseModel) applyFamilyDefaults(meta.baseModel);
+  };
+
+  const importWorkflow = async () => {
+    setError(null);
+    let imp: WorkflowImport | null;
+    try {
+      imp = await api.workspaces.importWorkflow();
+    } catch (err) {
+      setError(cleanError(err));
+      return;
+    }
+    if (!imp) return;
+    const result = imp;
+    const { models: used, defaults, negative, usesNegative } = result;
+    const model = used.checkpoint
+      ? byFolder.get('checkpoints')?.find((m) => m.file === used.checkpoint)
+      : filesIn('diffusion_models', 'unet').find((m) => m.file === used.unet);
+    setForm((f) => {
+      // A new workspace takes the model's family (or "Other"); an existing one keeps its own.
+      const base: BaseModel = isNew ? (model?.meta.baseModel ?? 'other') : f.baseModel;
+      const p = BASE_MODEL_PROFILES[base];
+      return {
+        ...f,
+        name: f.name || result.name,
+        baseModel: base,
+        pipeline: 'custom',
+        customWorkflow: JSON.stringify(result.workflow, null, 2),
+        defaults: { ...(isNew ? p.defaults : f.defaults), ...defaults },
+        positivePrefix: isNew ? p.positivePrefix : f.positivePrefix,
+        negativePrompt: usesNegative ? (negative ?? f.negativePrompt) : '',
+        // The app's LoRAs are not applied to custom workflows: the workflow's own loaders are.
+        loras: isNew ? [] : f.loras,
+      };
+    });
+    setImported(result);
   };
 
   const save = async () => {
@@ -167,7 +204,7 @@ export function WorkspaceEditor({ workspace, onClose }: Props) {
       await api.workspaces.save(input, isNew);
       onClose();
     } catch (err) {
-      setError(String((err as Error).message ?? err).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
+      setError(cleanError(err));
     } finally {
       setSaving(false);
     }
@@ -216,19 +253,24 @@ export function WorkspaceEditor({ workspace, onClose }: Props) {
             </Field>
           </div>
 
-          <Field label="Tipo">
-            <div className="segmented">
-              {(
-                [
-                  ['checkpoint', 'Checkpoint único'],
-                  ['flux', 'Flux (arquivos separados)'],
-                  ['custom', 'Workflow próprio (JSON)'],
-                ] as Array<[Pipeline, string]>
-              ).map(([p, label]) => (
-                <button key={p} className={`seg ${form.pipeline === p ? 'active' : ''}`} onClick={() => set('pipeline', p)}>
-                  {label}
-                </button>
-              ))}
+          <Field label="Tipo" hint="Para usar um workflow seu: no ComfyUI, Workflow → Export (API), e importe o arquivo aqui.">
+            <div className="row">
+              <div className="segmented">
+                {(
+                  [
+                    ['checkpoint', 'Checkpoint único'],
+                    ['flux', 'Flux (arquivos separados)'],
+                    ['custom', 'Workflow próprio (JSON)'],
+                  ] as Array<[Pipeline, string]>
+                ).map(([p, label]) => (
+                  <button key={p} className={`seg ${form.pipeline === p ? 'active' : ''}`} onClick={() => set('pipeline', p)}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <button className="btn small" onClick={() => void importWorkflow()}>
+                Importar do ComfyUI…
+              </button>
             </div>
           </Field>
 
@@ -260,10 +302,12 @@ export function WorkspaceEditor({ workspace, onClose }: Props) {
             </div>
           )}
 
+          {form.pipeline === 'custom' && imported && <ImportSummary imp={imported} installed={models} />}
+
           {form.pipeline === 'custom' && (
             <Field
               label="Workflow (formato API do ComfyUI)"
-              hint="No ComfyUI: Workflow → Export (API). Troque os valores por {{positive}}, {{negative}}, {{seed}}, {{width}}, {{height}}, {{steps}}, {{cfg}}, {{batch_size}}, {{sampler}}, {{scheduler}}."
+              hint="Os valores entre {{chaves}} vêm do app a cada geração: {{positive}}, {{negative}}, {{seed}}, {{width}}, {{height}}, {{steps}}, {{cfg}}, {{batch_size}}, {{sampler}}, {{scheduler}}, {{guidance}}."
             >
               <textarea className="mono" rows={8} value={form.customWorkflow} onChange={(e) => set('customWorkflow', e.target.value)} />
             </Field>
@@ -374,6 +418,51 @@ export function WorkspaceEditor({ workspace, onClose }: Props) {
       </div>
     </div>
   );
+}
+
+/** What the import detected, what the app now controls and what to check. */
+function ImportSummary({ imp, installed }: { imp: WorkflowImport; installed: InstalledModel[] }) {
+  const has = (file: string, ...folders: ModelFolder[]) => installed.some((m) => m.file === file && folders.includes(m.folder));
+  const missing = [
+    ...(imp.models.checkpoint && !has(imp.models.checkpoint, 'checkpoints') ? [imp.models.checkpoint] : []),
+    ...(imp.models.unet && !has(imp.models.unet, 'diffusion_models', 'unet') ? [imp.models.unet] : []),
+    ...imp.models.loras.filter((l) => !has(l, 'loras')),
+  ];
+  const model = imp.models.checkpoint ?? imp.models.unet;
+  return (
+    <div className="callout subtle small import-summary">
+      <div>
+        <strong>Importado de {imp.name}.json.</strong>
+        {model ? ` Modelo: ${model}.` : ''}
+        {imp.models.loras.length ? ` LoRAs do workflow: ${imp.models.loras.map(shortName).join(', ')}.` : ''}
+      </div>
+      {imp.replaced.length > 0 && (
+        <>
+          <div>O app passa a controlar:</div>
+          <ul>
+            {imp.replaced.map((r, i) => (
+              <li key={i}>{r}</li>
+            ))}
+          </ul>
+        </>
+      )}
+      {(imp.warnings.length > 0 || missing.length > 0) && (
+        <ul className="error">
+          {imp.warnings.map((w, i) => (
+            <li key={i}>{w}</li>
+          ))}
+          {missing.map((m) => (
+            <li key={m}>{m} não está nas pastas de modelos do ComfyUI.</li>
+          ))}
+        </ul>
+      )}
+      <div className="muted">As LoRAs do próprio workflow continuam valendo. As LoRAs desta tela não são aplicadas em workflows próprios.</div>
+    </div>
+  );
+}
+
+function cleanError(err: unknown): string {
+  return String((err as Error)?.message ?? err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 }
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {

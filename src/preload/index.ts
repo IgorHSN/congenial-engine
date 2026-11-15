@@ -21,6 +21,7 @@ import type {
   SecretName,
   Settings,
   SizeRequest,
+  WorkflowImport,
   Workspace,
   WorkspaceInput,
 } from '@shared/types';
@@ -79,6 +80,8 @@ const api = {
     setActive: (id: string): Promise<void> => ipcRenderer.invoke(IPC.workspacesSetActive, id),
     remove: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.workspacesDelete, id),
     save: (input: WorkspaceInput, makeActive?: boolean): Promise<Workspace> => ipcRenderer.invoke(IPC.workspacesSave, input, makeActive),
+    /** Pick an "Export (API)" file and turn it into a custom-workspace template; null when cancelled. */
+    importWorkflow: (): Promise<WorkflowImport | null> => ipcRenderer.invoke(IPC.workspacesImportWorkflow),
     onChange: (cb: (items: Workspace[]) => void) => on(IPC.workspacesChanged, cb),
   },
   models: {

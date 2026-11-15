@@ -1,4 +1,4 @@
-import { join, relative, resolve, sep, isAbsolute } from 'node:path';
+import { basename, extname, join, relative, resolve, sep, isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, protocol, safeStorage, shell } from 'electron';
 import { IMAGE_PROTOCOL, IPC } from '@shared/ipc';
@@ -14,11 +14,14 @@ import type {
   SecretName,
   Settings,
   SizeRequest,
+  WorkflowImport,
 } from '@shared/types';
 import { ClaudeAgent } from './claude/agent';
 import { ComfyClient } from './comfy/client';
 import { ModelInventory } from './comfy/inventory';
 import { detectComfy } from './comfy/detect';
+import { templateFromApiWorkflow } from './comfy/importWorkflow';
+import { readWorkflowFile } from './comfy/workflows';
 import { detectComfyLayout } from './comfy/paths';
 import { ComfyProcess } from './comfy/process';
 import { LocalLlm } from './generation/llm';
@@ -279,6 +282,19 @@ async function bootstrap(): Promise<void> {
     const ws = await workspaces.save(input);
     if (makeActive || workspaces.list().length === 1) await setActiveWorkspace(ws.id);
     return ws;
+  });
+
+  ipcMain.handle(IPC.workspacesImportWorkflow, async (): Promise<WorkflowImport | null> => {
+    // "Export (API)" downloads the file, so start in Downloads.
+    const res = await dialog.showOpenDialog(mainWindow!, {
+      title: 'Importar workflow do ComfyUI (arquivo do Export (API))',
+      defaultPath: app.getPath('downloads'),
+      filters: [{ name: 'Workflow do ComfyUI', extensions: ['json'] }],
+      properties: ['openFile'],
+    });
+    const file = res.canceled ? undefined : res.filePaths[0];
+    if (!file) return null;
+    return templateFromApiWorkflow(await readWorkflowFile(file), basename(file, extname(file)));
   });
 
   ipcMain.handle(IPC.comfySamplerOptions, async (): Promise<SamplerOptions> => {

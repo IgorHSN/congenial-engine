@@ -327,6 +327,19 @@ input[type='range'] {
   border-color: var(--border);
   color: var(--muted);
 }
+.import-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.import-summary strong {
+  color: var(--text);
+}
+.import-summary ul {
+  margin: 0;
+  padding-left: 18px;
+}
 
 .msg {
   max-width: 92%;

@@ -277,6 +277,50 @@ await editor.locator('.lora-row select').first().selectOption('watercolor_style_
 await win.screenshot({ path: join(OUT, 'screenshot-editor.png') });
 await editor.locator('button', { hasText: 'Salvar' }).click();
 await editor.waitFor({ state: 'detached' });
+
+// Import an "Export (API)" workflow in the editor (the native file dialog is stubbed).
+const apiFile = join(userData, 'Z-Image Turbo.json');
+writeFileSync(
+  apiFile,
+  JSON.stringify({
+    9: { class_type: 'SaveImage', inputs: { filename_prefix: 'z-image', images: ['57:8', 0] } },
+    '57:30': { class_type: 'CLIPLoader', inputs: { clip_name: 'qwen_3_4b.safetensors', type: 'lumina2', device: 'default' } },
+    '57:29': { class_type: 'VAELoader', inputs: { vae_name: 'ae.safetensors' } },
+    '57:28': { class_type: 'UNETLoader', inputs: { unet_name: 'z_image_turbo_bf16.safetensors', weight_dtype: 'default' } },
+    '57:11': { class_type: 'ModelSamplingAuraFlow', inputs: { shift: 3, model: ['57:28', 0] } },
+    '57:27': { class_type: 'CLIPTextEncode', inputs: { text: 'a lighthouse at dusk', clip: ['57:30', 0] } },
+    '57:33': { class_type: 'ConditioningZeroOut', inputs: { conditioning: ['57:27', 0] } },
+    '57:13': { class_type: 'EmptySD3LatentImage', inputs: { width: 1024, height: 1024, batch_size: 1 } },
+    '57:3': {
+      class_type: 'KSampler',
+      inputs: {
+        seed: 1,
+        steps: 8,
+        cfg: 1,
+        sampler_name: 'res_multistep',
+        scheduler: 'simple',
+        denoise: 1,
+        model: ['57:11', 0],
+        positive: ['57:27', 0],
+        negative: ['57:33', 0],
+        latent_image: ['57:13', 0],
+      },
+    },
+    '57:8': { class_type: 'VAEDecode', inputs: { samples: ['57:3', 0], vae: ['57:29', 0] } },
+  }),
+);
+await app.evaluate(({ dialog }, file) => {
+  dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] });
+}, apiFile);
+await gen.locator('button[title="Novo workspace"]').click();
+await editor.waitFor();
+await editor.locator('button', { hasText: 'Importar do ComfyUI' }).click();
+await editor.locator('.import-summary').waitFor();
+const importSummary = await editor.locator('.import-summary').innerText();
+const importedJson = await editor.locator('textarea.mono').inputValue();
+await win.screenshot({ path: join(OUT, 'screenshot-import.png') });
+await editor.locator('button', { hasText: 'Salvar' }).click();
+await editor.waitFor({ state: 'detached' });
 const workspaceOptions = await gen.locator('.chat-header select option').allTextContents();
 
 // MCP bridge exactly as Claude Desktop runs it: the app's Electron binary in node mode.
@@ -308,6 +352,7 @@ const lorasOf = (p) => Object.values(p).filter((x) => x.class_type === 'LoraLoad
 const appliedChips = await win.evaluate(() => [...document.querySelectorAll('.result:last-of-type .lora-chip.applied')].map((c) => c.textContent));
 const report = {
   workspaceOptions,
+  importSummary,
   shownCommand,
   mcpServer: replies.find((r) => r.id === 1)?.result?.serverInfo?.name,
   mcpTools: replies.find((r) => r.id === 2)?.result?.tools?.length,
@@ -330,11 +375,16 @@ const ok =
   llmRequests.length === 2 &&
   received.length === 2 &&
   report.secondLoras.includes('film_grain_pony.safetensors') &&
-  workspaceOptions.length === 2 &&
+  workspaceOptions.length === 3 &&
+  importSummary.includes('prompt positivo') &&
+  importSummary.includes('z_image_turbo_bf16.safetensors não está nas pastas') &&
+  importedJson.includes('"{{positive}}"') &&
+  importedJson.includes('"{{seed}}"') &&
   shownCommand.includes(join(APP, 'out', 'main', 'bridge.js')) &&
   report.mcpServer === 'comfy-atelier' &&
   report.mcpTools > 15 &&
   mcpWorkspaces?.includes('Manual · Pony') &&
+  mcpWorkspaces?.includes('Z-Image Turbo') &&
   report.latent.width === 1344 &&
   report.latent.height === 768 &&
   !report.firstLoras.includes('film_grain_pony.safetensors');

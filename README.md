@@ -100,6 +100,7 @@ O app trabalha em cima da sua instalação, sem copiar nada:
 - **Metadados sem internet**: para cada arquivo o app tenta descobrir o modelo base e as palavras-gatilho pelo cabeçalho do `.safetensors` (dados de treino do kohya/modelspec) e pelos arquivos auxiliares de outras ferramentas (`.civitai.info` do Civitai Helper, `.metadata.json` do LoRA Manager, `.json` do A1111/Forge), com o nome do arquivo como último recurso.
 - **Identificação exata**: peça ao chat de configuração *"identifique as LoRAs que eu já tenho"* — ele calcula o hash de cada arquivo e busca na Civitai (nome, modelo base, gatilhos, link).
 - **Workflows salvos**: peça *"importe meus workflows"*. O Claude lê os workflows salvos no ComfyUI (`user/default/workflows`), extrai checkpoint, LoRAs (inclusive pilhas do rgthree), sampler, steps, CFG, resolução e clip skip e cria workspaces equivalentes. Workflows com nós incomuns podem ser importados como estão via *Workflow → Export (API)*.
+- **Importar sem o Claude**: no ComfyUI, use *Workflow → Export (API)*; no editor de workspace do app, clique em **Importar do ComfyUI…** e escolha o arquivo. O app acha o sampler principal e põe marcadores no prompt (positivo e negativo), seed, steps, CFG, sampler, scheduler, guidance e no tamanho/quantidade do Empty Latent. O resto do workflow (custom nodes, LoRAs, detailers) continua como você montou. O editor mostra o que foi trocado e avisa quando algo não foi encontrado ou quando um modelo não está instalado.
 - Os workspaces, o histórico dos chats e os metadados ficam na pasta de dados do app (`%APPDATA%/Comfy Atelier` no Windows) e continuam lá quando você atualiza o app.
 
 ### Exemplos de pedidos
@@ -155,7 +156,7 @@ Detalhes da integração com o Claude:
 - O histórico é salvo **literalmente** e só recebe acréscimos (o system prompt e a lista de ferramentas não mudam entre turnos), o que mantém o cache e os blocos de raciocínio válidos.
 - As ferramentas usam `eager_input_streaming`, e toda entrada é validada com Zod antes de executar.
 
-Para conferir telas sem rodar o app: `docs/screenshot.png` (os dois chats), `docs/screenshot-editor.png` (editor de workspace) e `docs/screenshot-mcp.png` (Claude Desktop/Code).
+Para conferir telas sem rodar o app: `docs/screenshot.png` (os dois chats), `docs/screenshot-editor.png` (editor de workspace), `docs/screenshot-import.png` (workflow importado do ComfyUI) e `docs/screenshot-mcp.png` (Claude Desktop/Code).
 
 ## Próximos passos sugeridos
 

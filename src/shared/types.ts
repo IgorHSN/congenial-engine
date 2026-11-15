@@ -192,6 +192,27 @@ export interface Workspace {
   updatedAt: string;
 }
 
+/** An API-format ComfyUI workflow turned into a custom-workspace template. */
+export interface WorkflowImport {
+  /** File name without the extension. */
+  name: string;
+  /** The workflow with {{placeholders}} where the app's values go. */
+  workflow: Record<string, unknown>;
+  /** The values that were replaced, to use as the workspace defaults. */
+  defaults: Partial<SamplerDefaults>;
+  /** Prompt texts found in the workflow (before the placeholders). */
+  positive?: string;
+  negative?: string;
+  /** Whether the workflow takes a negative prompt (false when it zeroes the negative). */
+  usesNegative: boolean;
+  /** Model files the main sampler uses (checkpoint or diffusion model), plus every LoRA loaded. */
+  models: { checkpoint?: string; unet?: string; loras: string[] };
+  /** What became a placeholder, one line each, shown to the user (pt-BR). */
+  replaced: string[];
+  /** What could not be found or had to change, shown to the user (pt-BR). */
+  warnings: string[];
+}
+
 /** Create (no id) or update (id) a workspace; omitted fields keep their value or get family defaults. */
 export type WorkspaceInput = Partial<Omit<Workspace, 'createdAt' | 'updatedAt'>> & {
   name: string;
