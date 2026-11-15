@@ -7,6 +7,7 @@ import type {
   GenEvent,
   GenSendOptions,
   GenerationJob,
+  InstalledModel,
   LoraMode,
   LoraRef,
   RefinedPrompt,
@@ -143,7 +144,10 @@ export class GenerationSession {
       const split = splitLoras(ws, opts.loraModes);
       let refined: RefinedPrompt;
       if (raw) {
-        refined = { positive: userText, negative: '', loras: [], comment: 'Prompt enviado sem refinamento.' };
+        // No LLM to pick the "auto" LoRAs: use the ones the text names.
+        const inventory = await this.d.inventory.list('loras').catch(() => []);
+        const named = lorasNamedIn(userText, split.candidates, inventory);
+        refined = { positive: userText, negative: '', loras: named, comment: 'Prompt enviado sem refinamento.' };
       } else {
         const result = await this.refine(ws, userText, split, signal);
         if (result.refused) {
@@ -379,6 +383,28 @@ export interface LoraSplit {
   always: AppliedLora[];
   /** Optional LoRAs in "auto": the local LLM decides. */
   candidates: LoraRef[];
+}
+
+/**
+ * Without the local LLM: the optional LoRAs whose name (every word of the file
+ * name, in any order) or one of whose trigger words appears in the text.
+ */
+export function lorasNamedIn(text: string, candidates: LoraRef[], inventory: InstalledModel[]): LoraRef[] {
+  const words = (s: string) => s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const textWords = words(text);
+  const inText = new Set(textWords);
+  const joined = ` ${textWords.join(' ')} `;
+  const hasPhrase = (phrase: string) => {
+    const w = words(phrase);
+    return w.join('').length >= 3 && joined.includes(` ${w.join(' ')} `);
+  };
+  return candidates.filter((l) => {
+    const stem = (l.file.split('/').pop() ?? l.file).replace(/\.[^.]+$/, '');
+    const nameWords = words(stem).filter((w) => w.length > 1 && !/^\d+$/.test(w));
+    if (nameWords.length && nameWords.every((w) => inText.has(w))) return true;
+    const triggers = inventory.find((m) => m.folder === 'loras' && m.file === l.file)?.meta.triggerWords ?? [];
+    return triggers.some(hasPhrase);
+  });
 }
 
 /** Apply the user's per-LoRA choices from the generation chat to a workspace. */

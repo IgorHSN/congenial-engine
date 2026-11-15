@@ -74,7 +74,7 @@ export function WorkspaceStrip({ workspace: ws, models, modes, onModeChange, chi
         const { title, warn } = describe(l, byFile.get(l.file), ws);
         const label = { auto: 'auto', on: 'sempre', off: 'nunca' }[mode];
         const help = {
-          auto: 'O LLM local decide quando usar.',
+          auto: 'Entra quando o pedido combinar: o LLM local decide (sem LLM, quando o texto cita o nome ou as palavras-gatilho).',
           on: 'Você forçou: entra em toda geração.',
           off: 'Você desligou: nunca entra.',
         }[mode];
@@ -99,13 +99,13 @@ export function WorkspaceStrip({ workspace: ws, models, modes, onModeChange, chi
 const SOURCE_LABEL: Record<AppliedLora['source'], string> = {
   workspace: 'fixa',
   forced: 'você',
-  auto: 'LLM',
+  auto: 'auto',
 };
 
 const SOURCE_HELP: Record<AppliedLora['source'], string> = {
   workspace: 'Fixa no workspace',
   forced: 'Você forçou esta LoRA',
-  auto: 'Escolhida pelo LLM local para este pedido',
+  auto: 'Escolhida para este pedido (pelo LLM local, ou por ser citada no texto quando não há LLM)',
 };
 
 /** LoRAs actually applied to one generation. */

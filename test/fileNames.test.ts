@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import type { InstalledModel } from '@shared/types';
 import { ComfyClient } from '../src/main/comfy/client';
+import { lorasNamedIn } from '../src/main/generation/session';
 import { startFakeComfy } from './helpers/fakeServers';
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -41,3 +43,26 @@ describe('model file names sent to ComfyUI', () => {
   });
 });
 
+describe('optional LoRAs without the local LLM', () => {
+  const lora = (file: string, triggerWords: string[] = []): InstalledModel => ({ folder: 'loras', file, path: file, sizeBytes: 1, meta: { triggerWords } });
+  const candidates = [
+    { file: 'Unknown/no tags/Mai Shiranui.safetensors', strength: 0.8 },
+    { file: 'Unknown/no tags/Angewomon.safetensors', strength: 0.8 },
+    { file: 'anima3d_style_dim48_lr3e5-000009.safetensors', strength: 0.6 },
+    { file: 'ink_v2.safetensors', strength: 0.7 },
+  ];
+  const inventory = [lora('ink_v2.safetensors', ['inkwash style'])];
+
+  it('picks the ones the text names, by file name words or trigger words', () => {
+    expect(lorasNamedIn('sh3xy0 style, shiranui mai, Angewomon, face to face', candidates, inventory).map((l) => l.file)).toEqual([
+      'Unknown/no tags/Mai Shiranui.safetensors',
+      'Unknown/no tags/Angewomon.safetensors',
+    ]);
+    expect(lorasNamedIn('a cat, Inkwash Style, sunset', candidates, inventory).map((l) => l.file)).toEqual(['ink_v2.safetensors']);
+  });
+
+  it('does not pick on partial names', () => {
+    expect(lorasNamedIn('mai at the beach, anima style', candidates, inventory)).toEqual([]);
+    expect(lorasNamedIn('inkwash', candidates, inventory)).toEqual([]);
+  });
+});

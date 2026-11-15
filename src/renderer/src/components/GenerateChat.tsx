@@ -100,6 +100,8 @@ export function GenerateChat({ settings, workspaces, downloads, onOpenSettings }
   const activeId = settings.generation.activeWorkspaceId ?? workspaces[0]?.id ?? '';
   const active = workspaces.find((w) => w.id === activeId);
   const llmReady = !!settings.localLlm.model;
+  // Without a local LLM the text goes to the model as written.
+  const sendRaw = raw || !llmReady;
   const modes = allModes[activeId] ?? {};
   const size: SizeRequest = allSizes[activeId] ?? { kind: 'auto' };
   const setSize = (req: SizeRequest) => {
@@ -129,7 +131,7 @@ export function GenerateChat({ settings, workspaces, downloads, onOpenSettings }
     const t = input.trim();
     if (!t || busy) return;
     setInput('');
-    await api.gen.send(t, { raw, workspaceId: activeId || undefined, loraModes: modes, size });
+    await api.gen.send(t, { raw: sendRaw, workspaceId: activeId || undefined, loraModes: modes, size });
   };
 
   const clear = async () => {
@@ -187,7 +189,8 @@ export function GenerateChat({ settings, workspaces, downloads, onOpenSettings }
       <div className="chat-body" ref={scrollRef}>
         {!llmReady && (
           <div className="callout">
-            Escolha o servidor e o modelo do LLM local (Ollama, LM Studio…) nas configurações.{' '}
+            Sem LLM local, o texto vai direto para o modelo como prompt, e as LoRAs <em>auto</em> entram quando você cita o nome ou as
+            palavras-gatilho delas. Para o app escrever o prompt por você, escolha o servidor e o modelo do LLM local (Ollama, LM Studio…).{' '}
             <button className="btn small" onClick={onOpenSettings}>
               Configurar
             </button>
@@ -237,7 +240,7 @@ export function GenerateChat({ settings, workspaces, downloads, onOpenSettings }
         <textarea
           value={input}
           rows={2}
-          placeholder={raw ? 'Prompt literal para o modelo (sem refinamento)' : 'Ex.: retrato de uma guerreira élfica ao pôr do sol, luz dourada'}
+          placeholder={sendRaw ? 'Prompt literal para o modelo (sem refinamento)' : 'Ex.: retrato de uma guerreira élfica ao pôr do sol, luz dourada'}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -247,15 +250,18 @@ export function GenerateChat({ settings, workspaces, downloads, onOpenSettings }
           }}
         />
         <div className="composer-side">
-          <label className="toggle small" title="Enviar o texto direto como prompt, sem passar pelo LLM local">
-            <input type="checkbox" checked={raw} onChange={(e) => setRaw(e.target.checked)} /> raw
+          <label
+            className="toggle small"
+            title={llmReady ? 'Enviar o texto direto como prompt, sem passar pelo LLM local' : 'Sem LLM local configurado: o texto sempre vai direto como prompt'}
+          >
+            <input type="checkbox" checked={sendRaw} disabled={!llmReady} onChange={(e) => setRaw(e.target.checked)} /> raw
           </label>
           {busy ? (
             <button type="button" className="btn danger" onClick={() => void api.gen.stop()}>
               Parar
             </button>
           ) : (
-            <button type="submit" className="btn primary" disabled={!input.trim() || !workspaces.length || (!llmReady && !raw)}>
+            <button type="submit" className="btn primary" disabled={!input.trim() || !workspaces.length}>
               Gerar
             </button>
           )}
