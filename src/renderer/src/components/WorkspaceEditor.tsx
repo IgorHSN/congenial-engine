@@ -7,6 +7,7 @@ import {
   type ModelFolder,
   type Pipeline,
   type SamplerDefaults,
+  type ImportedLora,
   type SamplerOptions,
   type WorkflowImport,
   type Workspace,
@@ -148,6 +149,8 @@ export function WorkspaceEditor({ workspace, onClose }: Props) {
     const model = used.checkpoint
       ? byFolder.get('checkpoints')?.find((m) => m.file === used.checkpoint)
       : filesIn('diffusion_models', 'unet').find((m) => m.file === used.unet);
+    // The workflow's LoRAs become fixed LoRAs of the workspace (shown in the chat, applied by the app).
+    const fromWorkflow: LoraRow[] = result.loras.map((l) => ({ file: resolveLora(l, models), strength: l.strength, kind: 'fixed' }));
     setForm((f) => {
       // A new workspace takes the model's family (or "Other"); an existing one keeps its own.
       const base: BaseModel = isNew ? (model?.meta.baseModel ?? 'other') : f.baseModel;
@@ -161,8 +164,7 @@ export function WorkspaceEditor({ workspace, onClose }: Props) {
         defaults: { ...(isNew ? p.defaults : f.defaults), ...defaults },
         positivePrefix: isNew ? p.positivePrefix : f.positivePrefix,
         negativePrompt: usesNegative ? (negative ?? f.negativePrompt) : '',
-        // The app's LoRAs are not applied to custom workflows: the workflow's own loaders are.
-        loras: isNew ? [] : f.loras,
+        loras: isNew ? fromWorkflow : [...f.loras, ...fromWorkflow.filter((n) => !f.loras.some((o) => o.file === n.file))],
       };
     });
     setImported(result);
@@ -423,10 +425,11 @@ export function WorkspaceEditor({ workspace, onClose }: Props) {
 /** What the import detected, what the app now controls and what to check. */
 function ImportSummary({ imp, installed }: { imp: WorkflowImport; installed: InstalledModel[] }) {
   const has = (file: string, ...folders: ModelFolder[]) => installed.some((m) => m.file === file && folders.includes(m.folder));
+  const loras = imp.loras.map((l) => ({ ...l, file: resolveLora(l, installed) }));
   const missing = [
     ...(imp.models.checkpoint && !has(imp.models.checkpoint, 'checkpoints') ? [imp.models.checkpoint] : []),
     ...(imp.models.unet && !has(imp.models.unet, 'diffusion_models', 'unet') ? [imp.models.unet] : []),
-    ...imp.models.loras.filter((l) => !has(l, 'loras')),
+    ...loras.filter((l) => !has(l.file, 'loras')).map((l) => l.file),
   ];
   const model = imp.models.checkpoint ?? imp.models.unet;
   return (
@@ -434,8 +437,13 @@ function ImportSummary({ imp, installed }: { imp: WorkflowImport; installed: Ins
       <div>
         <strong>Importado de {imp.name}.json.</strong>
         {model ? ` Modelo: ${model}.` : ''}
-        {imp.models.loras.length ? ` LoRAs do workflow: ${imp.models.loras.map(shortName).join(', ')}.` : ''}
       </div>
+      {loras.length > 0 && (
+        <div>
+          LoRAs do workflow, agora fixas neste workspace (aparecem no chat):{' '}
+          {loras.map((l) => `${shortName(l.file)} ${l.strength}`).join(', ')}.
+        </div>
+      )}
       {imp.replaced.length > 0 && (
         <>
           <div>O app passa a controlar:</div>
@@ -456,9 +464,24 @@ function ImportSummary({ imp, installed }: { imp: WorkflowImport; installed: Ins
           ))}
         </ul>
       )}
-      <div className="muted">As LoRAs do próprio workflow continuam valendo. As LoRAs desta tela não são aplicadas em workflows próprios.</div>
+      <div className="muted">
+        O app aplica as LoRAs desta tela (fixas e as opcionais que o chat escolher) logo depois do carregador do modelo. As LoRAs que estavam no
+        workflow saíram dele para não serem aplicadas duas vezes.
+      </div>
     </div>
   );
+}
+
+/** Match an imported LoRA to an installed file (LoRA Manager stores only the name). */
+function resolveLora(l: ImportedLora, installed: InstalledModel[]): string {
+  const loras = installed.filter((m) => m.folder === 'loras');
+  if (loras.some((m) => m.file === l.file)) return l.file;
+  const stem = (f: string) =>
+    (f.split('/').pop() ?? f)
+      .replace(/\.(safetensors|ckpt|pt|bin)$/i, '')
+      .toLowerCase();
+  const found = loras.find((m) => stem(m.file) === stem(l.file));
+  return found?.file ?? (l.byName ? `${l.file}.safetensors` : l.file);
 }
 
 function cleanError(err: unknown): string {

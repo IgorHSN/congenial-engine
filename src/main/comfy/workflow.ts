@@ -1,5 +1,6 @@
 import type { LoraRef, Workspace } from '@shared/types';
 import type { ComfyGraph } from './client';
+import { findClipSource, findMainSampler, findModelLoader, freeId, rewire, samplerControls, type ApiGraph, type ApiLink } from './graph';
 
 export interface GenParams {
   positive: string;
@@ -27,7 +28,7 @@ type Link = [string, number];
 
 /** Build a ComfyUI API-format graph for a workspace. */
 export function buildWorkflow(ws: Workspace, p: GenParams): ComfyGraph {
-  if (ws.pipeline === 'custom') return fillTemplate(ws.customWorkflow ?? {}, p);
+  if (ws.pipeline === 'custom') return fillTemplate(injectLoras(ws.customWorkflow ?? {}, p.loras), p);
 
   const g: ComfyGraph = {};
   let nextId = 1;
@@ -130,6 +131,47 @@ function dedupeLoras(loras: LoraRef[]): LoraRef[] {
   const map = new Map<string, LoraRef>();
   for (const l of loras) if (l.file && l.strength !== 0) map.set(l.file, l);
   return [...map.values()];
+}
+
+/**
+ * Apply the app's LoRAs to a custom workflow: a LoraLoader chain right after
+ * the loader of the main sampler's model (and the CLIP of its positive prompt),
+ * with everything that read the loader now reading the end of the chain.
+ * Without a CLIP to patch (none found), LoraLoaderModelOnly is used.
+ */
+export function injectLoras(template: Record<string, unknown>, loras: LoraRef[]): Record<string, unknown> {
+  const list = dedupeLoras(loras);
+  if (!list.length) return template;
+  const g = structuredClone(template) as ApiGraph;
+  const main = findMainSampler(g);
+  const controls = main ? samplerControls(g, main) : [];
+  const loader = findModelLoader(g, controls);
+  if (!loader) {
+    throw new Error(
+      'Não achei o carregador do modelo (checkpoint ou UNET) do sampler principal neste workflow, então as LoRAs não podem ser aplicadas. Desligue as LoRAs deste workspace ou ajuste o workflow.',
+    );
+  }
+  const modelSrc: ApiLink = [loader, 0];
+  const clipSrc = findClipSource(g, controls);
+  const added = new Set<string>();
+  let model: ApiLink = modelSrc;
+  let clip: ApiLink | null = clipSrc;
+  for (const l of list) {
+    const id = freeId(g, 1000);
+    g[id] = clip
+      ? {
+          class_type: 'LoraLoader',
+          inputs: { model, clip, lora_name: l.file, strength_model: l.strength, strength_clip: l.strength },
+          _meta: { title: 'LoRA (Comfy Atelier)' },
+        }
+      : { class_type: 'LoraLoaderModelOnly', inputs: { model, lora_name: l.file, strength_model: l.strength }, _meta: { title: 'LoRA (Comfy Atelier)' } };
+    added.add(id);
+    model = [id, 0];
+    if (clip) clip = [id, 1];
+  }
+  rewire(g, modelSrc, model, added);
+  if (clipSrc && clip) rewire(g, clipSrc, clip, added);
+  return g;
 }
 
 const NUMERIC = new Set(['seed', 'width', 'height', 'steps', 'cfg', 'batch_size', 'guidance']);

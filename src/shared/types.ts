@@ -192,6 +192,15 @@ export interface Workspace {
   updatedAt: string;
 }
 
+export interface ImportedLora {
+  /** File relative to models/loras, or only the LoRA's name when `byName` (LoRA Manager stores names). */
+  file: string;
+  strength: number;
+  byName?: boolean;
+  /** The node it came from, for the summary. */
+  from: string;
+}
+
 /** An API-format ComfyUI workflow turned into a custom-workspace template. */
 export interface WorkflowImport {
   /** File name without the extension. */
@@ -205,8 +214,13 @@ export interface WorkflowImport {
   negative?: string;
   /** Whether the workflow takes a negative prompt (false when it zeroes the negative). */
   usesNegative: boolean;
-  /** Model files the main sampler uses (checkpoint or diffusion model), plus every LoRA loaded. */
-  models: { checkpoint?: string; unet?: string; loras: string[] };
+  /** The model file the main sampler uses (checkpoint or diffusion model). */
+  models: { checkpoint?: string; unet?: string };
+  /**
+   * LoRAs that were active in the workflow. They are taken out of it (so they
+   * are not applied twice) and become the workspace's fixed LoRAs.
+   */
+  loras: ImportedLora[];
   /** What became a placeholder, one line each, shown to the user (pt-BR). */
   replaced: string[];
   /** What could not be found or had to change, shown to the user (pt-BR). */

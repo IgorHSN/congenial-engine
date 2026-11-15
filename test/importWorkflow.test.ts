@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import type { Workspace } from '@shared/types';
 import { templateFromApiWorkflow } from '../src/main/comfy/importWorkflow';
-import { fillTemplate, type GenParams } from '../src/main/comfy/workflow';
+import { buildWorkflow, fillTemplate, injectLoras, type GenParams } from '../src/main/comfy/workflow';
 
 type Graph = Record<string, { class_type: string; inputs: Record<string, unknown>; _meta?: { title: string } }>;
 const node = (class_type: string, inputs: Record<string, unknown>, title?: string) => ({ class_type, inputs, ...(title ? { _meta: { title } } : {}) });
@@ -77,7 +78,8 @@ describe('importing an API-format workflow', () => {
       negative: 'blurry, lowres',
       usesNegative: true,
       defaults: { steps: 28, cfg: 6, sampler: 'euler_ancestral', scheduler: 'normal', width: 832, height: 1216, batchSize: 2 },
-      models: { checkpoint: 'ponyV6.safetensors', loras: ['style.safetensors'] },
+      models: { checkpoint: 'ponyV6.safetensors' },
+      loras: [{ file: 'style.safetensors', strength: 0.8, from: 'LoraLoader (#10)' }],
       warnings: [],
     });
     expect(imp.replaced.some((r) => r.startsWith('prompt positivo: CLIPTextEncode (#6)'))).toBe(true);
@@ -131,7 +133,8 @@ describe('importing an API-format workflow', () => {
     expect(imp.warnings.filter((w) => w.includes('ResolutionSelector (#20)'))).toHaveLength(2);
     expect(imp.defaults).toEqual({ steps: 8, cfg: 1, sampler: 'res_multistep', scheduler: 'simple', batchSize: 1 });
     // The model is found through ModelSamplingAuraFlow.
-    expect(imp.models).toEqual({ unet: 'z_image_turbo_bf16.safetensors', loras: [] });
+    expect(imp.models).toEqual({ unet: 'z_image_turbo_bf16.safetensors' });
+    expect(imp.loras).toEqual([]);
     // Preview-only workflows save their images so the app gets them.
     expect(g['11']).toMatchObject({ class_type: 'SaveImage', inputs: { filename_prefix: 'atelier', images: ['10', 0] } });
   });
@@ -176,6 +179,55 @@ describe('importing an API-format workflow', () => {
     expect(imp.warnings).toEqual(['O prompt positivo vinha do nó StringConcatenate (#30); agora quem define é o app.']);
   });
 
+  it('moves LoraLoader nodes out of the workflow and wires around them', () => {
+    const imp = templateFromApiWorkflow(sdxlGraph());
+    const g = imp.workflow as Graph;
+    expect(g['10']).toBeUndefined();
+    expect(g['3'].inputs.model).toEqual(['4', 0]);
+    expect(g['12'].inputs.model).toEqual(['4', 0]);
+    expect(g['6'].inputs.clip).toEqual(['4', 1]);
+    expect(g['7'].inputs.clip).toEqual(['4', 1]);
+  });
+
+  it('takes the active LoRAs from rgthree and LoRA Manager loaders', () => {
+    const graph = sdxlGraph();
+    delete graph['10'];
+    graph['20'] = node('Power Lora Loader (rgthree)', {
+      PowerLoraLoaderHeaderWidget: { type: 'PowerLoraLoaderHeaderWidget' },
+      lora_1: { on: true, lora: 'Pony\\ink.safetensors', strength: 0.7 },
+      lora_2: { on: false, lora: 'unused.safetensors', strength: 1 },
+      '➕ Add Lora': '',
+      model: ['4', 0],
+      clip: ['4', 1],
+    });
+    graph['21'] = node('Lora Loader (LoraManager)', {
+      text: '<lora:Mai Shiranui:0.90> <lora:Angewomon:0.90:0.90>',
+      loras: {
+        __value__: [
+          { name: 'Mai Shiranui', strength: '0.90', active: true, clipStrength: '0.90' },
+          { name: 'Angewomon', strength: '0.90', active: false, clipStrength: '0.90' },
+        ],
+      },
+      model: ['20', 0],
+      clip: ['20', 1],
+    });
+    for (const id of ['3', '12']) graph[id].inputs.model = ['21', 0];
+    for (const id of ['6', '7']) graph[id].inputs.clip = ['21', 1];
+
+    const imp = templateFromApiWorkflow(graph);
+    expect(imp.loras).toEqual([
+      { file: 'Pony/ink.safetensors', strength: 0.7, from: 'Power Lora Loader (rgthree) (#20)' },
+      { file: 'Mai Shiranui', strength: 0.9, from: 'Lora Loader (LoraManager) (#21)', byName: true },
+    ]);
+    const g = imp.workflow as Graph;
+    // The loaders stay (they pass the model through) but apply nothing.
+    expect(g['20'].inputs.lora_1).toMatchObject({ on: false });
+    expect(g['20'].inputs.lora_2).toMatchObject({ on: false });
+    expect(g['21'].inputs).toMatchObject({ text: '', loras: { __value__: [] } });
+    // The model is still found through them.
+    expect(imp.models.checkpoint).toBe('ponyV6.safetensors');
+  });
+
   it('explains what is wrong with other files', () => {
     expect(() => templateFromApiWorkflow({ nodes: [], links: [] })).toThrow(/Export \(API\)/);
     expect(() => templateFromApiWorkflow({ foo: 1 })).toThrow(/Export \(API\)/);
@@ -183,5 +235,58 @@ describe('importing an API-format workflow', () => {
     const noSampler = templateFromApiWorkflow({ '1': node('LoadImage', { image: 'a.png' }) });
     expect(noSampler.warnings[0]).toMatch(/sampler principal/);
     expect(noSampler.warnings[1]).toMatch(/salve imagens/);
+  });
+});
+
+describe('LoRAs in custom workflows', () => {
+  const zImage = (): Graph => ({
+    '1': node('UNETLoader', { unet_name: 'anima.safetensors', weight_dtype: 'default' }),
+    '2': node('CLIPLoader', { clip_name: 'qwen.safetensors', type: 'qwen_image' }),
+    '4': node('ModelSamplingAuraFlow', { model: ['1', 0], shift: 3 }),
+    '6': node('CLIPTextEncode', { text: '{{positive}}', clip: ['2', 0] }),
+    '7': node('CLIPTextEncode', { text: '{{negative}}', clip: ['2', 0] }),
+    '8': node('EmptySD3LatentImage', { width: '{{width}}', height: '{{height}}', batch_size: '{{batch_size}}' }),
+    '9': node('KSampler', { seed: '{{seed}}', steps: 30, cfg: 4, sampler_name: 'er_sde', scheduler: 'simple', denoise: 1, model: ['4', 0], positive: ['6', 0], negative: ['7', 0], latent_image: ['8', 0] }),
+    '10': node('FaceDetailer', { model: ['4', 0], clip: ['2', 0], image: ['11', 0] }),
+    '11': node('VAEDecode', { samples: ['9', 0], vae: ['3', 0] }),
+    '3': node('VAELoader', { vae_name: 'qwen_image_vae.safetensors' }),
+  });
+
+  it('chains the app LoRAs right after the model and CLIP loaders', () => {
+    const ws = {
+      id: 'w', name: 'Anima', description: '', baseModel: 'other', pipeline: 'custom', customWorkflow: zImage(),
+      loras: [], optionalLoras: [], defaults: {}, positivePrefix: '', negativePrompt: '', refinerNotes: '', createdAt: '', updatedAt: '',
+    } as unknown as Workspace;
+    const g = buildWorkflow(ws, { ...params, loras: [{ file: 'a.safetensors', strength: 0.8 }, { file: 'b.safetensors', strength: 0.5 }] }) as Graph;
+    const added = Object.keys(g).filter((id) => g[id].class_type === 'LoraLoader');
+    expect(added).toHaveLength(2);
+    const [first, second] = added;
+    expect(g[first].inputs).toMatchObject({ model: ['1', 0], clip: ['2', 0], lora_name: 'a.safetensors', strength_model: 0.8, strength_clip: 0.8 });
+    expect(g[second].inputs).toMatchObject({ model: [first, 0], clip: [first, 1], lora_name: 'b.safetensors', strength_model: 0.5 });
+    // Everything that read the loaders now reads the end of the chain (detailer included).
+    expect(g['4'].inputs.model).toEqual([second, 0]);
+    expect(g['6'].inputs.clip).toEqual([second, 1]);
+    expect(g['7'].inputs.clip).toEqual([second, 1]);
+    expect(g['10'].inputs).toMatchObject({ model: ['4', 0], clip: [second, 1] });
+    // Placeholders are still filled.
+    expect(g['6'].inputs.text).toBe('APP POSITIVE');
+    // The stored workflow is not modified.
+    expect((ws.customWorkflow as Graph)['4'].inputs.model).toEqual(['1', 0]);
+  });
+
+  it('uses LoraLoaderModelOnly without a CLIP and explains a missing model loader', () => {
+    const noClip = zImage();
+    noClip['6'].inputs.clip = ['99', 0]; // not a node of the graph
+    noClip['7'].inputs.clip = ['99', 0];
+    const g = injectLoras(noClip, [{ file: 'a.safetensors', strength: 1 }]) as Graph;
+    const id = Object.keys(g).find((k) => g[k].class_type === 'LoraLoaderModelOnly')!;
+    expect(g[id].inputs).toEqual({ model: ['1', 0], lora_name: 'a.safetensors', strength_model: 1 });
+    expect(g['4'].inputs.model).toEqual([id, 0]);
+
+    expect(injectLoras(zImage(), [])).toEqual(zImage());
+    const noLoader = zImage();
+    delete noLoader['1'];
+    noLoader['4'].inputs.model = ['50', 0];
+    expect(() => injectLoras(noLoader, [{ file: 'a.safetensors', strength: 1 }])).toThrow(/carregador do modelo/);
   });
 });

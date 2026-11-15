@@ -1,11 +1,20 @@
-import type { SamplerDefaults, WorkflowImport } from '@shared/types';
-
-interface ApiNode {
-  class_type: string;
-  inputs: Record<string, unknown>;
-  _meta?: { title?: string };
-}
-type ApiGraph = Record<string, ApiNode>;
+import type { ImportedLora, SamplerDefaults, WorkflowImport } from '@shared/types';
+import {
+  conditioningInput,
+  findMainSampler,
+  findModelLoader,
+  findUp,
+  followConditioning,
+  hasTextInput,
+  isEmptyLatent,
+  linkOf,
+  rewire,
+  samplerControls,
+  TEXT_KEYS,
+  type ApiGraph,
+  type ApiLink,
+  type ApiNode,
+} from './graph';
 
 type Placeholder = 'positive' | 'negative' | 'seed' | 'width' | 'height' | 'steps' | 'cfg' | 'batch_size' | 'sampler' | 'scheduler' | 'guidance';
 
@@ -33,32 +42,14 @@ const SAMPLER_KEYS: Array<[string, Placeholder]> = [
   ['sampler_name', 'sampler'],
   ['scheduler', 'scheduler'],
 ];
-const HELPER_INPUTS = ['guider', 'sampler', 'sigmas', 'noise'];
-/** Inputs that never carry conditioning: not followed when looking for the prompt nodes. */
-const NOT_CONDITIONING = new Set([
-  'clip',
-  'model',
-  'vae',
-  'image',
-  'images',
-  'pixels',
-  'mask',
-  'samples',
-  'latent',
-  'latent_image',
-  'control_net',
-  'style_model',
-  'clip_vision',
-  'clip_vision_output',
-  'upscale_model',
-  'noise',
-  'sampler',
-  'sigmas',
-]);
-const TEXT_KEYS = ['text', 'prompt', 'text_g', 'text_l'];
 
 const isNode = (v: unknown): v is ApiNode =>
   !!v && typeof v === 'object' && typeof (v as ApiNode).class_type === 'string' && !!(v as ApiNode).inputs && typeof (v as ApiNode).inputs === 'object';
+
+const toNumber = (v: unknown): number | undefined => {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : undefined;
+};
 
 /** Check that a file is an API-format workflow ("Export (API)") and return a copy of it. */
 export function parseApiWorkflow(data: unknown): ApiGraph {
@@ -78,43 +69,17 @@ export function parseApiWorkflow(data: unknown): ApiGraph {
  * Turn an API-format workflow into a custom-workspace template: find the main
  * sampler (the one fed by an empty latent), then put {{placeholders}} on its
  * prompt texts, seed, steps, cfg, sampler, scheduler, guidance and on the
- * empty latent's size and batch. Everything else stays as the user built it.
+ * empty latent's size and batch. Active LoRAs move out of the workflow into
+ * the workspace (the app re-applies them, see injectLoras). Everything else
+ * stays as the user built it.
  */
 export function templateFromApiWorkflow(data: unknown, name = 'Workflow importado'): WorkflowImport {
   const g = parseApiWorkflow(data);
-  const ids = Object.keys(g);
   const defaults: Partial<SamplerDefaults> = {};
-  const out: WorkflowImport = { name, workflow: g, defaults, usesNegative: false, models: { loras: [] }, replaced: [], warnings: [] };
+  const out: WorkflowImport = { name, workflow: g, defaults, usesNegative: false, models: {}, loras: [], replaced: [], warnings: [] };
 
   const label = (id: string) => `${g[id]._meta?.title || g[id].class_type} (#${id})`;
-  const linkOf = (v: unknown): string | null =>
-    Array.isArray(v) && v.length === 2 && (typeof v[0] === 'string' || typeof v[0] === 'number') && typeof v[1] === 'number' && String(v[0]) in g
-      ? String(v[0])
-      : null;
   const fitsType = (ph: Placeholder, v: unknown) => (TEXT_PLACEHOLDERS.has(ph) ? typeof v === 'string' : typeof v === 'number');
-
-  /** Breadth-first search upstream from a link; returns the first node that matches. */
-  const findUp = (from: unknown, match: (id: string) => boolean, follow: (key: string) => boolean = () => true, depth = 8): string | null => {
-    const start = linkOf(from);
-    if (!start) return null;
-    const seen = new Set([start]);
-    let level = [start];
-    for (let d = 0; d < depth && level.length; d++) {
-      const next: string[] = [];
-      for (const id of level) {
-        if (match(id)) return id;
-        for (const [k, v] of Object.entries(g[id].inputs)) {
-          const up = follow(k) ? linkOf(v) : null;
-          if (up && !seen.has(up)) {
-            seen.add(up);
-            next.push(up);
-          }
-        }
-      }
-      level = next;
-    }
-    return null;
-  };
 
   /**
    * Put {{ph}} on an input and return the value it replaced. A value wired from a
@@ -124,7 +89,7 @@ export function templateFromApiWorkflow(data: unknown, name = 'Workflow importad
   const place = (id: string, key: string, ph: Placeholder): string | number | undefined => {
     const token = `{{${ph}}}`;
     const value = g[id].inputs[key];
-    const src = linkOf(value);
+    const src = linkOf(g, value);
     if (!src) {
       if (!fitsType(ph, value)) return undefined;
       g[id].inputs[key] = token;
@@ -132,7 +97,7 @@ export function templateFromApiWorkflow(data: unknown, name = 'Workflow importad
       return value as string | number;
     }
     const prim = Object.entries(g[src].inputs);
-    if (prim.length === 1 && !linkOf(prim[0][1]) && fitsType(ph, prim[0][1])) {
+    if (prim.length === 1 && !linkOf(g, prim[0][1]) && fitsType(ph, prim[0][1])) {
       g[src].inputs[prim[0][0]] = token;
       out.replaced.push(`${WHAT[ph]}: ${label(src)}`);
       return prim[0][1] as string | number;
@@ -143,20 +108,14 @@ export function templateFromApiWorkflow(data: unknown, name = 'Workflow importad
     return undefined;
   };
 
-  const isEmptyLatent = (id: string) => /empty.*latent|latent.*empty/i.test(g[id].class_type);
-  const samplers = ids.filter((id) => linkOf(g[id].inputs.latent_image));
-  const main =
-    samplers.find((id) => {
-      const up = linkOf(g[id].inputs.latent_image);
-      return !!up && isEmptyLatent(up);
-    }) ??
-    samplers.find((id) => findUp(g[id].inputs.latent_image, isEmptyLatent)) ??
-    samplers[0];
+  // LoRAs first, so the model and CLIP wires below see the graph without them.
+  extractLoras(g, out.loras, label);
 
+  const main = findMainSampler(g);
   if (!main) {
     out.warnings.push('Não achei o sampler principal (um nó com latent_image); nada foi trocado por valores do app.');
   } else {
-    const control = [main, ...HELPER_INPUTS.map((k) => linkOf(g[main].inputs[k])).filter((id): id is string => !!id)];
+    const control = samplerControls(g, main);
 
     // Sampler settings.
     const placed = new Set<Placeholder>();
@@ -175,10 +134,7 @@ export function templateFromApiWorkflow(data: unknown, name = 'Workflow importad
     if (!placed.has('steps')) out.warnings.push('Não achei os steps do sampler principal; o valor do app não terá efeito.');
 
     // Prompts: follow the conditioning wires from the sampler (or its guider) to the text encoders.
-    const condFrom = (role: 'positive' | 'negative') =>
-      control.map((c) => g[c].inputs[role] ?? (role === 'positive' ? g[c].inputs.conditioning : undefined)).find((v) => linkOf(v));
-    const follow = (k: string) => !NOT_CONDITIONING.has(k);
-    const hasText = (id: string) => TEXT_KEYS.some((k) => k in g[id].inputs);
+    const hasText = (id: string) => hasTextInput(g, id);
     const placeText = (id: string, ph: 'positive' | 'negative') => {
       let first: string | undefined;
       for (const k of TEXT_KEYS) {
@@ -189,23 +145,24 @@ export function templateFromApiWorkflow(data: unknown, name = 'Workflow importad
       return first;
     };
 
-    const posEncoder = findUp(condFrom('positive'), hasText, follow);
+    const posFrom = conditioningInput(g, control, 'positive');
+    const posEncoder = findUp(g, posFrom, hasText, followConditioning);
     if (posEncoder) {
       out.positive = placeText(posEncoder, 'positive');
     } else {
       out.warnings.push('Não achei o nó do prompt positivo (ex.: CLIPTextEncode); o texto do app não vai entrar no workflow.');
     }
     // Flux-style guidance on the positive side.
-    const guidanceNode = findUp(condFrom('positive'), (id) => typeof g[id].inputs.guidance === 'number', follow);
+    const guidanceNode = findUp(g, posFrom, (id) => typeof g[id].inputs.guidance === 'number', followConditioning);
     if (guidanceNode) {
       const original = place(guidanceNode, 'guidance', 'guidance');
       if (typeof original === 'number') defaults.guidance = original;
     }
 
-    const negFrom = condFrom('negative');
+    const negFrom = conditioningInput(g, control, 'negative');
     if (negFrom) {
-      const zeroed = findUp(negFrom, (id) => /zero/i.test(g[id].class_type), follow);
-      const negEncoder = zeroed ? null : findUp(negFrom, hasText, follow);
+      const zeroed = findUp(g, negFrom, (id) => /zero/i.test(g[id].class_type), followConditioning);
+      const negEncoder = zeroed ? null : findUp(g, negFrom, hasText, followConditioning);
       if (negEncoder && negEncoder !== posEncoder) {
         out.negative = placeText(negEncoder, 'negative');
         out.usesNegative = true;
@@ -215,7 +172,7 @@ export function templateFromApiWorkflow(data: unknown, name = 'Workflow importad
     }
 
     // Size and batch on the empty latent.
-    const latent = findUp(g[main].inputs.latent_image, isEmptyLatent);
+    const latent = findUp(g, g[main].inputs.latent_image, (id) => isEmptyLatent(g, id));
     if (latent) {
       for (const [key, ph] of [
         ['width', 'width'],
@@ -233,30 +190,19 @@ export function templateFromApiWorkflow(data: unknown, name = 'Workflow importad
       out.warnings.push('Não achei o nó de tamanho (Empty Latent); o tamanho escolhido no app não terá efeito.');
     }
 
-    // The model the main sampler uses.
-    const modelFrom = control.map((c) => g[c].inputs.model).find((v) => linkOf(v));
-    const loader = findUp(modelFrom, (id) => typeof g[id].inputs.ckpt_name === 'string' || typeof g[id].inputs.unet_name === 'string', () => true, 12);
+    // The model the main sampler uses (the app puts its LoRAs right after this loader).
+    const loader = findModelLoader(g, control);
     if (loader) {
       const i = g[loader].inputs;
       if (typeof i.ckpt_name === 'string') out.models.checkpoint = i.ckpt_name;
       else out.models.unet = i.unet_name as string;
-    }
-  }
-
-  // LoRAs: core loaders and rgthree's Power Lora Loader (lora_1: { on, lora, strength }).
-  for (const id of ids) {
-    for (const [k, v] of Object.entries(g[id].inputs)) {
-      const file =
-        k === 'lora_name' && typeof v === 'string'
-          ? v
-          : /^lora_\d+$/.test(k) && v && typeof v === 'object' && (v as { on?: unknown }).on !== false
-            ? (v as { lora?: unknown }).lora
-            : undefined;
-      if (typeof file === 'string' && file !== 'None' && !out.models.loras.includes(file)) out.models.loras.push(file);
+    } else {
+      out.warnings.push('Não achei o carregador do modelo do sampler principal; as LoRAs do app não poderão ser aplicadas neste workflow.');
     }
   }
 
   // The app only receives images saved to the output folder.
+  const ids = Object.keys(g);
   const savesImages = ids.some((id) => /save/i.test(g[id].class_type) && ('images' in g[id].inputs || 'image' in g[id].inputs));
   if (!savesImages) {
     const previews = ids.filter((id) => g[id].class_type === 'PreviewImage');
@@ -268,4 +214,51 @@ export function templateFromApiWorkflow(data: unknown, name = 'Workflow importad
   }
 
   return out;
+}
+
+/**
+ * Take the active LoRAs out of the workflow so the workspace can manage them:
+ * core LoraLoader / LoraLoaderModelOnly nodes are removed (their wires pass
+ * through), rgthree's Power Lora Loader entries are switched off and LoRA
+ * Manager's list and text are emptied (those nodes stay, doing nothing).
+ */
+function extractLoras(g: ApiGraph, loras: ImportedLora[], label: (id: string) => string): void {
+  const add = (file: string, strength: unknown, from: string, byName = false) => {
+    const s = toNumber(strength) ?? 1;
+    if (!file || file === 'None' || s === 0) return;
+    const norm = file.replace(/\\/g, '/');
+    if (!loras.some((l) => l.file === norm)) loras.push({ file: norm, strength: s, from, ...(byName ? { byName } : {}) });
+  };
+
+  for (const id of Object.keys(g)) {
+    const node = g[id];
+    const i = node.inputs;
+    if ((node.class_type === 'LoraLoader' || node.class_type === 'LoraLoaderModelOnly') && typeof i.lora_name === 'string') {
+      add(i.lora_name, i.strength_model, label(id));
+      if (linkOf(g, i.model)) rewire(g, [id, 0], i.model as ApiLink);
+      if (node.class_type === 'LoraLoader' && linkOf(g, i.clip)) rewire(g, [id, 1], i.clip as ApiLink);
+      delete g[id];
+      continue;
+    }
+    // rgthree Power Lora Loader: lora_1: { on, lora, strength }
+    for (const [k, v] of Object.entries(i)) {
+      if (!/^lora_\d+$/.test(k) || !v || typeof v !== 'object' || Array.isArray(v)) continue;
+      const entry = v as { on?: unknown; lora?: unknown; strength?: unknown };
+      if (entry.on !== false && typeof entry.lora === 'string') add(entry.lora, entry.strength, label(id));
+      i[k] = { ...entry, on: false };
+    }
+    // LoRA Manager: loras: { __value__: [{ name, strength, active }] } plus a "<lora:name:strength>" text.
+    const list = (i.loras as { __value__?: unknown } | undefined)?.__value__;
+    if (Array.isArray(list)) {
+      for (const e of list as Array<{ name?: unknown; strength?: unknown; active?: unknown }>) {
+        if (e.active !== false && typeof e.name === 'string') add(e.name, e.strength, label(id), true);
+      }
+      i.loras = { __value__: [] };
+      if (typeof i.text === 'string') {
+        // The list already says which are active; read the text only when there is no list.
+        if (!list.length) for (const m of i.text.matchAll(/<lora:([^:>]+):([^:>]+)(?::[^>]*)?>/g)) add(m[1].trim(), m[2], label(id), true);
+        i.text = '';
+      }
+    }
+  }
 }

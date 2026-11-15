@@ -703,7 +703,8 @@ export const TOOLS = [
       'pipeline "checkpoint" uses a single checkpoint (SD1.5/SDXL/Pony/Illustrious/NoobAI or all-in-one Flux); "flux" uses ' +
       'unet + clip1 + clip2 + vae; "custom" takes a ComfyUI API-format workflow with {{placeholders}}. Defaults, prefix and ' +
       'negative are filled from the base model family when omitted. Put always-on LoRAs in loras and situational ones in optional_loras ' +
-      '(the local LLM decides when to use them based on their metadata).',
+      '(the local LLM decides when to use them based on their metadata). In a custom workflow the app inserts these LoRAs right after ' +
+      'the main model loader, so leave LoRA loaders out of custom_workflow.',
     schema: z.object({
       id: z.string().optional(),
       name: z.string(),
