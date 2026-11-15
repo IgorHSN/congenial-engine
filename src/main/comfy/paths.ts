@@ -1,6 +1,5 @@
 import { existsSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import type { ModelFolder } from '@shared/types';
 
 export interface ComfyLayout {
   root: string;
@@ -38,10 +37,6 @@ export function detectComfyLayout(input: string): ComfyLayout | null {
   };
 }
 
-export function modelsDir(root: string, folder: ModelFolder): string {
-  return join(root, 'models', folder);
-}
-
 /**
  * Resolve a model-relative path and make sure it cannot escape the folder
  * (the path comes from the model, so treat it as untrusted).
@@ -54,6 +49,12 @@ export function safeJoin(base: string, rel: string): string {
     throw new Error(`Caminho inválido: ${rel}`);
   }
   return target;
+}
+
+/** True when `child` is `parent` itself or a path inside it (case-insensitive on Windows). */
+export function isInside(child: string, parent: string): boolean {
+  const r = relative(parent, child);
+  return r === '' || (r !== '..' && !r.startsWith(`..${sep}`) && !isAbsolute(r));
 }
 
 /** Strip characters that are invalid in file names on Windows/macOS/Linux. */

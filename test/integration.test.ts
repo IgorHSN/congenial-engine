@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { GenEntry, GenEvent, Settings } from '@shared/types';
 import { TOOL_PARAMS, TOOLS, toolByName, type ToolContext } from '../src/main/claude/tools';
@@ -401,6 +401,35 @@ describe('Claude tools', () => {
     expect(existsSync(join(t.root, 'models', 'loras', 'cool_style.safetensors'))).toBe(true);
     const meta = await t.inventory.getMeta('loras', 'cool_style.safetensors');
     expect(meta).toMatchObject({ baseModel: 'pony', triggerWords: ['cool style'] });
+  });
+
+  it('download_model saves to the server default folder, legacy names included', async () => {
+    const { t, ctx } = await toolCtx(true);
+    const shared = join(tempDir('atelier-shared-'), 'models');
+    const inventory = new ModelInventory(join(t.root, 'data'), () => t.root, async () => ({
+      diffusion_models: [join(shared, 'diffusion_models'), join(t.root, 'models', 'diffusion_models')],
+    }));
+    const dests: string[] = [];
+    const out = await run(
+      'download_model',
+      { source: 'url', url: 'https://example.invalid/flux1-dev.safetensors', folder: 'unet', base_model: 'flux' },
+      {
+        ...ctx,
+        inventory,
+        downloader: {
+          enqueue: (req: Parameters<Downloader['enqueue']>[0]) => {
+            dests.push(req.dest);
+            mkdirSync(dirname(req.dest), { recursive: true });
+            writeFileSync(req.dest, 'unet-bytes');
+            return { id: 'dl2', done: Promise.resolve({ ...req, id: 'dl2', state: 'done', receivedBytes: 10, totalBytes: 10, bytesPerSecond: 0, startedAt: '' }) };
+          },
+        } as unknown as Downloader,
+      },
+    );
+    expect(dests).toEqual([join(shared, 'diffusion_models', 'flux1-dev.safetensors')]);
+    expect(JSON.parse(out as string)).toMatchObject({ status: 'installed', folder: 'diffusion_models', file: 'flux1-dev.safetensors' });
+    const listed = await inventory.list('diffusion_models');
+    expect(listed.map((m) => [m.file, m.meta.baseModel])).toEqual([['flux1-dev.safetensors', 'flux']]);
   });
 
   it('save_workspace fills defaults and reports missing files; test_workspace runs it', async () => {

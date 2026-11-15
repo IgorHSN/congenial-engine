@@ -5,7 +5,7 @@ import { MODEL_FOLDERS, type InstalledModel, type ModelFolder, type ModelMeta } 
 import { JsonFile } from '../store';
 import { ModelDirectories } from './modelDirs';
 import { detectMeta } from './modelMeta';
-import { modelsDir, safeJoin } from './paths';
+import { safeJoin } from './paths';
 
 const MODEL_EXTENSIONS = new Set(['.safetensors', '.ckpt', '.pt', '.pt2', '.pth', '.bin', '.gguf', '.sft', '.onnx', '.pkl']);
 
@@ -53,9 +53,10 @@ export class ModelInventory {
     return root;
   }
 
-  /** Where new downloads for this folder go. */
-  primaryDir(folder: ModelFolder): string {
-    return modelsDir(this.root(), folder);
+  /** Where new downloads for this folder go (see ModelDirectories.defaultDir). */
+  async primaryDir(folder: ModelFolder): Promise<string> {
+    this.root();
+    return this.directories.defaultDir(folder);
   }
 
   async dirs(folder: ModelFolder): Promise<string[]> {

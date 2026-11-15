@@ -96,6 +96,40 @@ describe('ModelInventory across folders', () => {
     expect(await inv.exists('loras', '../escape.safetensors')).toBe(false);
   });
 
+  it('downloads go to the folder the server treats as default', async () => {
+    // ComfyUI Desktop: the install has its own models/, but the server lists the shared folder first.
+    const root = tmp('atelier-root-');
+    const shared = join(tmp('atelier-shared-'), 'models');
+    let online = true;
+    const inv = new ModelInventory(tmp('atelier-data-'), () => root, async () => {
+      if (!online) throw new Error('offline');
+      return {
+        loras: [join(shared, 'loras'), join(root, 'models', 'loras')],
+        text_encoders: [join(shared, 'clip'), join(shared, 'text_encoders'), join(root, 'models', 'text_encoders')],
+        controlnet: [join(shared, 't2i_adapter')],
+      };
+    });
+    expect(await inv.primaryDir('loras')).toBe(join(shared, 'loras'));
+    // Same base as the server default, under the folder's own name when it is listed.
+    expect(await inv.primaryDir('text_encoders')).toBe(join(shared, 'text_encoders'));
+    expect(await inv.primaryDir('controlnet')).toBe(join(shared, 't2i_adapter'));
+    // Not reported by the server, or a legacy name: models/<folder> of the install.
+    expect(await inv.primaryDir('vae')).toBe(join(root, 'models', 'vae'));
+    expect(await inv.primaryDir('clip')).toBe(join(root, 'models', 'clip'));
+
+    // ComfyUI stopped: keep using the last answer instead of switching folders.
+    online = false;
+    inv.directories.invalidate();
+    expect(await inv.primaryDir('loras')).toBe(join(shared, 'loras'));
+  });
+
+  it('falls back to models/<folder> without a server answer', async () => {
+    const root = tmp('atelier-root-');
+    const inv = new ModelInventory(tmp('atelier-data-'), () => root);
+    expect(await inv.primaryDir('checkpoints')).toBe(join(root, 'models', 'checkpoints'));
+    await expect(new ModelInventory(tmp('atelier-data-'), () => '').primaryDir('loras')).rejects.toThrow(/pasta do ComfyUI/);
+  });
+
   it('auto-detects metadata offline and lets explicit metadata win', async () => {
     const root = tmp('atelier-root-');
     const dir = join(root, 'models', 'loras');

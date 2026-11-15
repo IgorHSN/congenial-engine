@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, normalize, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { MODEL_FOLDERS, type ModelFolder } from '@shared/types';
 
@@ -70,7 +70,7 @@ export function readExtraModelPaths(comfyRoot: string): Record<string, string[]>
  * ComfyUI Desktop's own config).
  */
 export class ModelDirectories {
-  private serverCache: { at: number; value: Record<string, string[]> | null } = { at: 0, value: null };
+  private serverCache: { at: number; root: string; value: Record<string, string[]> | null } = { at: 0, root: '', value: null };
 
   constructor(
     private readonly getRoot: () => string,
@@ -78,19 +78,41 @@ export class ModelDirectories {
   ) {}
 
   private async serverPaths(): Promise<Record<string, string[]>> {
-    if (Date.now() - this.serverCache.at < 30_000) return this.serverCache.value ?? {};
-    let value: Record<string, string[]> | null = null;
+    const root = this.getRoot();
+    if (this.serverCache.root !== root) this.serverCache = { at: 0, root, value: null };
+    const cache = this.serverCache;
+    if (Date.now() - cache.at < 30_000) return cache.value ?? {};
     try {
-      value = await this.fetchServerPaths();
+      cache.value = await this.fetchServerPaths();
     } catch {
-      value = null;
+      // Keep the last answer for this install: its folders are still on disk
+      // while ComfyUI is stopped, and downloads should keep going to the same place.
     }
-    this.serverCache = { at: Date.now(), value };
-    return value ?? {};
+    cache.at = Date.now();
+    return cache.value ?? {};
   }
 
   invalidate(): void {
     this.serverCache.at = 0;
+  }
+
+  /**
+   * Where new files for a folder go: the first path the running server reports,
+   * which is ComfyUI's own default (ComfyUI Desktop's shared models folder, or an
+   * extra_model_paths.yaml entry marked is_default) and where ComfyUI-Manager
+   * installs too. Falls back to <root>/models/<folder>. Legacy names (clip, unet)
+   * keep their own default dir, the only one all() scans for them.
+   */
+  async defaultDir(folder: ModelFolder): Promise<string> {
+    const fallback = normalize(join(this.getRoot(), 'models', folder));
+    if (folder === 'clip' || folder === 'unet') return fallback;
+    const dirs = ((await this.serverPaths())[folder] ?? []).filter((d) => isAbsolute(d));
+    const first = dirs[0];
+    if (!first) return fallback;
+    // One base can hold several names for a folder (clip and text_encoders,
+    // t2i_adapter and controlnet): prefer the folder's own name there.
+    const own = dirs.find((d) => basename(d).toLowerCase() === folder && relative(dirname(d), dirname(first)) === '');
+    return normalize(own ?? first);
   }
 
   async all(): Promise<Record<ModelFolder, string[]>> {

@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { BASE_MODELS, MODEL_FOLDERS, type ApprovalRequest, type ModelFolder, type Settings } from '@shared/types';
 import type { ComfyClient } from '../comfy/client';
 import type { ModelInventory } from '../comfy/inventory';
-import { detectComfyLayout, safeJoin, sanitizeFileName } from '../comfy/paths';
+import { detectComfyLayout, isInside, safeJoin, sanitizeFileName } from '../comfy/paths';
 import { listWorkflows, readWorkflowFile, resolveWorkflowPath, summarizeWorkflow } from '../comfy/workflows';
 import type { ComfyProcess } from '../comfy/process';
 import { buildWorkflow, randomSeed } from '../comfy/workflow';
@@ -127,7 +127,8 @@ export const TOOLS = [
         out.modelCounts = counts;
         const extra: Record<string, string[]> = {};
         for (const [folder, dirs] of Object.entries(await ctx.inventory.directories.all())) {
-          const more = dirs.slice(1).filter((d) => !d.startsWith(ctx.inventory.primaryDir(folder as ModelFolder)));
+          const main = await ctx.inventory.primaryDir(folder as ModelFolder);
+          const more = dirs.filter((d) => !isInside(d, main));
           if (more.length) extra[folder] = more;
         }
         if (Object.keys(extra).length) out.extraModelDirs = extra;
@@ -152,7 +153,8 @@ export const TOOLS = [
       requireRoot(ctx);
       let items = await ctx.inventory.list(folder);
       if (search) items = items.filter((m) => m.file.toLowerCase().includes(search.toLowerCase()));
-      const primary = (f: ModelFolder) => ctx.inventory.primaryDir(f);
+      const primary = new Map<ModelFolder, string>();
+      for (const m of items) if (!primary.has(m.folder)) primary.set(m.folder, await ctx.inventory.primaryDir(m.folder));
       return json({
         count: items.length,
         models: items.slice(0, 200).map((m) => ({
@@ -166,7 +168,7 @@ export const TOOLS = [
           recommendedStrength: m.meta.recommendedStrength,
           description: m.meta.description?.slice(0, 160),
           source: m.meta.source?.url,
-          location: m.path.startsWith(primary(m.folder)) ? undefined : m.path,
+          location: isInside(m.path, primary.get(m.folder)!) ? undefined : m.path,
         })),
         truncated: items.length > 200,
       });
@@ -334,10 +336,14 @@ export const TOOLS = [
         meta.source = { kind: 'url', url: input.url };
       }
       if (!folder) throw new ToolError('folder is required (could not infer it).');
+      // ComfyUI reads the legacy names through the new ones; saving under the new
+      // name lets the file go to the server's default folder like everything else.
+      if (folder === 'clip') folder = 'text_encoders';
+      else if (folder === 'unet') folder = 'diffusion_models';
 
       const safeName = sanitizeFileName(fileName);
       const rel = input.subfolder ? `${input.subfolder.replace(/^[\\/]+|[\\/]+$/g, '')}/${safeName}` : safeName;
-      const dest = safeJoin(ctx.inventory.primaryDir(folder), rel);
+      const dest = safeJoin(await ctx.inventory.primaryDir(folder), rel);
       if (existsSync(dest) || (await ctx.inventory.exists(folder, rel))) {
         await ctx.inventory.setMeta(folder, rel, { ...meta, sha256, addedAt: new Date().toISOString() });
         return json({ status: 'already_installed', folder, file: rel, note: 'Metadata updated.' });
@@ -347,7 +353,7 @@ export const TOOLS = [
         const ok = await ctx.approve({
           toolName: 'download_model',
           title: `Baixar ${label}`,
-          details: `Destino: models/${folder}/${rel}\nOrigem: ${url.replace(/token=[^&]+/, 'token=***')}`,
+          details: `Destino: ${dest}\nOrigem: ${url.replace(/token=[^&]+/, 'token=***')}`,
           danger: 'low',
         });
         if (!ok) return 'USER_DENIED: the user declined this download.';
